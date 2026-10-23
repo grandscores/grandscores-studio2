@@ -176,3 +176,5 @@ select,input[type=date],input:not([type=checkbox]){background:var(--field);borde
   .test-banner{margin:0 14px 10px}
   .preview-frame{height:40vh;max-height:none}
 }
+.preview-note{margin:8px 2px 0}
+#printerPages .seg-btn{min-width:28px}

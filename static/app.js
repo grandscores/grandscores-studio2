@@ -15,6 +15,7 @@ const state = {
   feedLoaded: false,
   added: new Set(),         // fixture ids already on a page
   previewPage: 1,
+  printerPage: 0,
   liveTimer: null,
 };
 
@@ -296,7 +297,7 @@ $('testMode').onchange = () => {
 
 /* ---------------- output format ---------------- */
 document.querySelectorAll('[data-format]').forEach(b => b.onclick = () => {
-  state.format = b.dataset.format;
+  state.format = b.dataset.format; state.printerPage = 0;
   document.querySelectorAll('[data-format]').forEach(x => x.classList.toggle('active', x === b));
   $('introOpt').hidden = state.format !== 'video';
   $('generate').textContent = state.format === 'video' ? 'Generate results video' : 'Generate vidi printer';
@@ -310,6 +311,7 @@ function syncPreviewLabels() { document.querySelectorAll('#previewPages [data-pa
 function updatePreviewChrome() {
   const results = state.mode === 'results';
   $('previewPages').hidden = !(results && state.format === 'video');
+  if (!(results && state.format === 'printer')) { $('printerPages').hidden = true; $('printerNote').hidden = true; }
   $('previewScenes').hidden = results;
   $('previewTitle').textContent = results ? (state.format === 'printer' ? 'Vidi printer' : 'Preview') : 'Table preview';
 }
@@ -323,14 +325,32 @@ async function updatePreview() {
     let url, body;
     if (state.format === 'printer') {
       const ls = allLeagues(); if (!ls.some(l => l.results.length)) { $('previewEmpty').textContent = 'Add a result to see the vidi printer.'; showImage(null); return; }
-      url = '/preview-printer'; body = { leagues: ls, mid90sLoopBackground: $('mid90sBg').checked };
+      url = '/preview-printer'; body = { leagues: ls, mid90sLoopBackground: $('mid90sBg').checked, page: state.printerPage };
     } else {
       const d = leagueData(state.previewPage); if (!d.results.length) { $('previewEmpty').textContent = `Page ${state.previewPage} is empty. Add a result to see the graphic.`; showImage(null); return; }
       url = '/preview'; body = d;
     }
     const j = await readJson(await fetch(url, { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), 'Preview');
-    if (seq === previewSeq) showImage(j.image);
+    if (seq !== previewSeq) return;
+    showImage(j.image);
+    if (state.format === 'printer') renderPrinterPager(j);
   } catch (e) { if (seq === previewSeq) { showImage(null); $('previewEmpty').textContent = e.message; } }
+}
+
+function renderPrinterPager(j) {
+  state.printerPage = j.page;
+  const wrap = $('printerPages'); wrap.innerHTML = '';
+  wrap.hidden = j.page_count < 2;
+  for (let i = 0; i < j.page_count; i++) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'seg-btn' + (i === j.page ? ' active' : '');
+    b.textContent = String(i + 1); b.title = `${j.pages[i].competition}: ${j.pages[i].results} result${j.pages[i].results === 1 ? '' : 's'}`;
+    b.setAttribute('aria-label', `Page ${i + 1}`);
+    b.onclick = () => { state.printerPage = i; updatePreview(); };
+    wrap.appendChild(b);
+  }
+  const note = $('printerNote');
+  note.hidden = j.page_count < 2;
+  note.textContent = `The video prints ${j.page_count} pages: ${j.pages.map(p => p.results).join(', ')} results. Late results are left out.`;
 }
 
 /* ---------------- render jobs ---------------- */
