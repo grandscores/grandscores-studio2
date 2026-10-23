@@ -44,7 +44,7 @@ TABLE_DETAIL_NO_LOGO.putalpha(_alpha)
 FONT_CACHE = {}
 RESULT_FONT_SIZE = 42
 MAX_TEAM_CHARS = 20
-APP_VERSION = '5.40'
+APP_VERSION = '5.41'
 PREVIEW_MAX_AGE = 300
 
 def font(size):
@@ -123,6 +123,24 @@ def draw_fitted_text(base, text, x, visible_top, fnt, max_width=None):
     px=int(round(x-bbox[0])); py=int(round(visible_top-bbox[1])); d=ImageDraw.Draw(base)
     d.text((px+2,py+2),text,font=fnt,fill=(42,52,76,230)); d.text((px,py),text,font=fnt,fill=(242,242,234,255))
 
+# Vertical placement for text inside the grey result boxes. The grey band in
+# result_box_row.png runs from y=10 to y=75; capitals are centred in it (lifted
+# slightly so descenders such as p, g, y still sit well inside the band). Every
+# row uses the same baseline, whatever letters the team names contain.
+BOX_BAND_TOP, BOX_BAND_BOTTOM = 10, 75
+ROW_TEXT_LIFT = 2
+
+def _row_text_origin(fnt):
+    cap=fnt.getbbox('H'); cap_h=cap[3]-cap[1]
+    centre=(BOX_BAND_TOP+BOX_BAND_BOTTOM)/2
+    return centre-cap_h/2-ROW_TEXT_LIFT-cap[1]
+
+def draw_row_text(base, text, x, row_top, fnt):
+    if not text: return
+    bbox=fnt.getbbox(text); d=ImageDraw.Draw(base)
+    px=int(round(x-bbox[0])); py=int(round(row_top+_row_text_origin(fnt)))
+    d.text((px+2,py+2),text,font=fnt,fill=(42,52,76,230)); d.text((px,py),text,font=fnt,fill=(242,242,234,255))
+
 def validate_results(data):
     for li,results_set in enumerate(data['leagues'],1):
         for i,r in enumerate(results_set['results'],1):
@@ -150,9 +168,9 @@ def make_frame(data, reveal_index=None, progress=1.0, transparent=False):
             if rev<=0: continue
             row_top=y; f=font(RESULT_FONT_SIZE); sample_bbox=f.getbbox(r['home'] or score_text(r) or r['away']); glyph_h=sample_bbox[3]-sample_bbox[1]; visible_top=row_top+(109-glyph_h)/2-7
             if rev>=1:
-                draw_fitted_text(base,r['home'],95,visible_top,f); sc=score_text(r); sw=f.getbbox(sc)[2]-f.getbbox(sc)[0]; draw_fitted_text(base,sc,(473+607)/2-sw/2,visible_top,f); draw_fitted_text(base,r['away'],638,visible_top,f)
+                draw_row_text(base,r['home'],95,row_top,f); sc=score_text(r); sw=f.getbbox(sc)[2]-f.getbbox(sc)[0]; draw_row_text(base,sc,(473+607)/2-sw/2,row_top,f); draw_row_text(base,r['away'],638,row_top,f)
             else:
-                row_w=1049-75; overlay=Image.new('RGBA',(row_w,109),(0,0,0,0)); draw_fitted_text(overlay,r['home'],20,visible_top-row_top,f); sc=score_text(r); sw=f.getbbox(sc)[2]-f.getbbox(sc)[0]; draw_fitted_text(overlay,sc,(473+607)/2-75-sw/2,visible_top-row_top,f); draw_fitted_text(overlay,r['away'],563,visible_top-row_top,f); reveal_w=int(round(row_w*rev));
+                row_w=1049-75; overlay=Image.new('RGBA',(row_w,109),(0,0,0,0)); draw_row_text(overlay,r['home'],20,0,f); sc=score_text(r); sw=f.getbbox(sc)[2]-f.getbbox(sc)[0]; draw_row_text(overlay,sc,(473+607)/2-75-sw/2,0,f); draw_row_text(overlay,r['away'],563,0,f); reveal_w=int(round(row_w*rev));
                 if reveal_w>0: base.alpha_composite(overlay.crop((0,0,reveal_w,109)),(75,row_top))
         return base if transparent else base.convert('RGB')
 
@@ -191,9 +209,9 @@ def make_frame(data, reveal_index=None, progress=1.0, transparent=False):
         if rev<=0: continue
         glyph_h=f.getbbox(r['home'] or score_text(r) or r['away'])[3]-f.getbbox(r['home'] or score_text(r) or r['away'])[1]; visible_top=y+(109-glyph_h)/2-7
         if rev>=1:
-            draw_fitted_text(base,r['home'],95,visible_top,f); sc=score_text(r); sw=f.getbbox(sc)[2]-f.getbbox(sc)[0]; draw_fitted_text(base,sc,(473+607)/2-sw/2,visible_top,f); draw_fitted_text(base,r['away'],638,visible_top,f)
+            draw_row_text(base,r['home'],95,y,f); sc=score_text(r); sw=f.getbbox(sc)[2]-f.getbbox(sc)[0]; draw_row_text(base,sc,(473+607)/2-sw/2,y,f); draw_row_text(base,r['away'],638,y,f)
         else:
-            row_w=1049-75; overlay=Image.new('RGBA',(row_w,109),(0,0,0,0)); draw_fitted_text(overlay,r['home'],20,visible_top-y,f); sc=score_text(r); sw=f.getbbox(sc)[2]-f.getbbox(sc)[0]; draw_fitted_text(overlay,sc,(473+607)/2-75-sw/2,visible_top-y,f); draw_fitted_text(overlay,r['away'],563,visible_top-y,f); reveal_w=int(round(row_w*rev));
+            row_w=1049-75; overlay=Image.new('RGBA',(row_w,109),(0,0,0,0)); draw_row_text(overlay,r['home'],20,0,f); sc=score_text(r); sw=f.getbbox(sc)[2]-f.getbbox(sc)[0]; draw_row_text(overlay,sc,(473+607)/2-75-sw/2,0,f); draw_row_text(overlay,r['away'],563,0,f); reveal_w=int(round(row_w*rev));
             if reveal_w>0: base.alpha_composite(overlay.crop((0,0,reveal_w,109)),(75,y))
     return base if transparent else base.convert('RGB')
 
@@ -806,24 +824,36 @@ def _printer_layout(page):
         y=last_bottom+PRINTER_RESULT_GAP
     return ys
 
+def _printer_page_fits(page):
+    if not page or len(page)>PRINTER_MAX_PER_PAGE: return False
+    ys=_printer_layout(page); r=page[-1][1]
+    scorers=_printer_scorer_lines(r)
+    max_sc=max(len([x for x in scorers if x[0]=='home']),len([x for x in scorers if x[0]=='away']))
+    return ys[-1]+(65+(max_sc-1)*PRINTER_LINE_GAP+42 if max_sc else 52)<=PRINTER_BOTTOM_LIMIT
+
+def _printer_balance(items, page_count):
+    """Split items into page_count pages whose sizes differ by at most one."""
+    base,extra=divmod(len(items),page_count); out=[]; i=0
+    for p in range(page_count):
+        n=base+(1 if p<extra else 0); out.append(items[i:i+n]); i+=n
+    return out
+
 def _printer_paginate(data):
-    """Pack up to five results per page, using content height rather than fixed rows."""
+    """Split each competition across as few pages as fit, spreading results evenly
+    so the last page is not left with a single straggler (e.g. 11 -> 4, 4, 3)."""
     pages=[]
     for sec in data.get('leagues') or []:
         comp=str(sec.get('competition') or 'Competition')
-        completed=[r for r in (sec.get('results') or []) if r.get('homeScore') is not None and r.get('awayScore') is not None]
-        current=[]
-        for r in completed:
-            trial=current+[(comp,r)]
-            ys=_printer_layout(trial)
-            scorers=_printer_scorer_lines(r)
-            max_sc=max(len([x for x in scorers if x[0]=='home']),len([x for x in scorers if x[0]=='away']))
-            bottom=ys[-1]+(65+(max_sc-1)*PRINTER_LINE_GAP+42 if max_sc else 52)
-            if current and (len(trial)>PRINTER_MAX_PER_PAGE or bottom>PRINTER_BOTTOM_LIMIT):
-                pages.append(current); current=[(comp,r)]
-            else:
-                current=trial
-        if current: pages.append(current)
+        items=[(comp,r) for r in (sec.get('results') or []) if r.get('homeScore') is not None and r.get('awayScore') is not None]
+        if not items: continue
+        greedy=[]; current=[]
+        for it in items:
+            trial=current+[it]
+            if current and not _printer_page_fits(trial): greedy.append(current); current=[it]
+            else: current=trial
+        if current: greedy.append(current)
+        balanced=_printer_balance(items,len(greedy))
+        pages.extend(balanced if all(_printer_page_fits(p) for p in balanced) else greedy)
     return pages or [[]]
 
 def _printer_draw_cursor(base,x,y,font_obj,visible=True):
@@ -1518,10 +1548,15 @@ def generate_table():
 
 @app.post('/preview-printer')
 def preview_printer():
-    data=clean_leagues(request.get_json(force=True)); im=make_printer_frame(data,0,None,False)
+    raw=request.get_json(force=True) or {}; data=clean_leagues(raw)
+    pages=_printer_paginate(data)
+    try: page=max(0,min(int(raw.get('page',0)),len(pages)-1))
+    except Exception: page=0
+    im=make_printer_frame(data,page,None,False)
     from io import BytesIO
     b=BytesIO(); im.save(b,'JPEG',quality=84,optimize=True)
-    return jsonify(image='data:image/jpeg;base64,'+base64.b64encode(b.getvalue()).decode('ascii'))
+    return jsonify(image='data:image/jpeg;base64,'+base64.b64encode(b.getvalue()).decode('ascii'),page=page,page_count=len(pages),
+                   pages=[{'competition':p[0][0] if p else '','results':len(p)} for p in pages])
 
 @app.post('/generate-printer')
 def generate_printer():

@@ -72,6 +72,11 @@ assets/              Fonts, artwork, audio and the Mid-90s loop video
 
 ## Changelog
 
+### v5.41
+- Vidi Printer splits a competition evenly across pages (11 results print as 4, 4, 3 rather than 5, 5, 1), still allowing for scorer lines.
+- Vidi Printer preview has page buttons, so every page can be checked before rendering.
+- Results Video: team names and scores are centred in the grey boxes on one shared baseline, instead of each row being placed by its own letter shapes (which left some names sitting on the bottom edge).
+
 ### v5.40
 - Choose which day's results to load: Live (today, refreshing every minute), the previous six days, or a date range of up to seven days.
 - New `/api/fixtures` endpoint (`/api/live-scores` still works) accepting `?date=YYYY-MM-DD` or `?start=…&end=…`. The Sportmonks `livescores` endpoint is only called when the range includes today.
