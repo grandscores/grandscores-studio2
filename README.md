@@ -72,6 +72,10 @@ assets/              Fonts, artwork, audio and the Mid-90s loop video
 
 ## Changelog
 
+### v5.42
+- Results Video and Vidi Printer voiceovers share one script line. The away score now runs straight on from the away team ("Wigan Athletic nill.") with no comma or pause, so it is read flat and falling rather than stressed.
+- ElevenLabs requests send steadier voice settings: stability 0.70, similarity 0.75, style 0. Each can be changed with the optional Railway variables `ELEVENLABS_STABILITY`, `ELEVENLABS_SIMILARITY`, `ELEVENLABS_STYLE` and `ELEVENLABS_SPEED`.
+
 ### v5.41
 - Vidi Printer splits a competition evenly across pages (11 results print as 4, 4, 3 rather than 5, 5, 1), still allowing for scorer lines.
 - Vidi Printer preview has page buttons, so every page can be checked before rendering.

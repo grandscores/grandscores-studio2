@@ -44,7 +44,7 @@ TABLE_DETAIL_NO_LOGO.putalpha(_alpha)
 FONT_CACHE = {}
 RESULT_FONT_SIZE = 42
 MAX_TEAM_CHARS = 20
-APP_VERSION = '5.41'
+APP_VERSION = '5.42'
 PREVIEW_MAX_AGE = 300
 
 def font(size):
@@ -241,18 +241,27 @@ def vo_text(text):
         out=re.sub(r'(?<!\w)'+re.escape(source)+r'(?!\w)', replacement, out, flags=re.I)
     return out
 
+def vo_score_word(value):
+    """Spoken form of a score. 0 stays spelt 'nill' so TTS says /nɪl/."""
+    value=int(value or 0)
+    if value==0: return 'nill'
+    return {1:'one',2:'two',3:'three',4:'four',5:'five',6:'six',7:'seven',8:'eight',9:'nine',10:'ten'}.get(value,str(value))
+
+def vo_result_line(home, away, home_score, away_score):
+    """One spoken result, e.g. 'Oxford United, [pause] two. [pause] Wigan Athletic one.'
+
+    The away score runs straight on from the away team with no comma or pause and
+    closes with a full stop, so it reads as the end of a sentence and falls in
+    pitch instead of being lifted and stressed as a separate reveal."""
+    return (f"{home}, <break time=\"0.18s\" /> {vo_score_word(home_score)}. "
+            f"<break time=\"0.24s\" /> {away} {vo_score_word(away_score)}.")
+
 def script_lines(data):
     lines=[f"{data['competition']} Division."]
     for r in data['results']:
         home=vo_team_name(r['home']); away=vo_team_name(r['away'])
         if r['homeScore'] is None or r['awayScore'] is None: lines.append(f"{home} versus {away}, late result.")
-        else:
-            def vo_score(value):
-                if value == 0: return 'nill'  # Keep football score 0 consistently pronounced as 'nil' /nɪl/ by TTS.
-                words = {1:'one',2:'two',3:'three',4:'four',5:'five',6:'six',7:'seven',8:'eight',9:'nine',10:'ten'}
-                return words.get(int(value), str(value))
-            hs=vo_score(r['homeScore']); aws=vo_score(r['awayScore'])
-            lines.append(f"{home}, <break time=\"0.18s\" /> {hs}. <break time=\"0.24s\" /> {away}, <break time=\"0.18s\" /> {aws}.")
+        else: lines.append(vo_result_line(home,away,r['homeScore'],r['awayScore']))
     return lines
 
 def combine_small_result_sets(data):
@@ -279,12 +288,28 @@ def combined_script_lines(league):
         lines += script_lines({'competition':section['competition'], 'results':section['results']})
     return lines
 
+def _env_float(name, default, low=0.0, high=1.0):
+    try: return max(low,min(high,float(os.getenv(name,default))))
+    except (TypeError,ValueError): return default
+
+def elevenlabs_voice_settings():
+    """Higher stability and zero style give an even, newsreader-like delivery that
+    is less likely to stress single words such as 'nil'. Each value can be tuned
+    with a Railway variable without changing code."""
+    return {
+        'stability':_env_float('ELEVENLABS_STABILITY',0.70),
+        'similarity_boost':_env_float('ELEVENLABS_SIMILARITY',0.75),
+        'style':_env_float('ELEVENLABS_STYLE',0.0),
+        'use_speaker_boost':True,
+        'speed':_env_float('ELEVENLABS_SPEED',1.0,0.7,1.2),
+    }
+
 def elevenlabs_tts(text,path,max_retries=6):
     key=os.getenv('ELEVENLABS_API_KEY'); voice=os.getenv('ELEVENLABS_VOICE_ID'); model=os.getenv('ELEVENLABS_MODEL','eleven_multilingual_v2')
     if not key: raise RuntimeError('ELEVENLABS_API_KEY is not configured in the service environment.')
     if not voice: raise RuntimeError('ELEVENLABS_VOICE_ID is not configured in the service environment.')
     url=f'https://api.elevenlabs.io/v1/text-to-speech/{voice}/stream?output_format=mp3_44100_128'
-    payload={'text':text,'model_id':model,'apply_text_normalization':'auto','voice_settings':{'speed':1.0}}
+    payload={'text':text,'model_id':model,'apply_text_normalization':'auto','voice_settings':elevenlabs_voice_settings()}
     delay=1.0
     for attempt in range(max_retries+1):
         req=urllib.request.Request(url,data=json.dumps(payload).encode('utf-8'),headers={'xi-api-key':key,'Content-Type':'application/json','Accept':'audio/mpeg'},method='POST')
@@ -933,9 +958,7 @@ def make_printer_frame(data, page_index=0, line_states=None, cursor_on=True, tra
     return base if transparent else base.convert('RGB')
 
 def _printer_voice_line(r):
-    hs='nill' if int(r.get('homeScore') or 0)==0 else {1:'one',2:'two',3:'three',4:'four',5:'five',6:'six',7:'seven',8:'eight',9:'nine',10:'ten'}.get(int(r.get('homeScore')),str(r.get('homeScore')))
-    aws='nill' if int(r.get('awayScore') or 0)==0 else {1:'one',2:'two',3:'three',4:'four',5:'five',6:'six',7:'seven',8:'eight',9:'nine',10:'ten'}.get(int(r.get('awayScore')),str(r.get('awayScore')))
-    return vo_text(f"{r.get('home','')}, <break time=\"0.18s\" /> {hs}. <break time=\"0.24s\" /> {r.get('away','')}, <break time=\"0.18s\" /> {aws}.")
+    return vo_text(vo_result_line(r.get('home',''),r.get('away',''),r.get('homeScore'),r.get('awayScore')))
 
 def _make_printer_sfx(path, events, duration):
     """Build the Vidi Printer SFX track from the bundled printer_typing.wav asset.
