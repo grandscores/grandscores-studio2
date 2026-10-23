@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en-GB"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Grandscores Studio</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ app_version }}">
+</head>
+<body>
+<header class="top">
+  <img class="studio-logo" src="/studio-logo" alt="Grandscores Studio Live">
+  <div class="top-right">
+    <label class="switch" title="Use built-in sample data instead of Sportmonks"><input type="checkbox" id="testMode"><span>Test data</span></label>
+    <span class="version">v{{ app_version }}</span>
+  </div>
+</header>
+
+<div class="test-banner" id="testBanner" hidden>Test data is on. Nothing is requested from Sportmonks.</div>
+
+<nav class="mode-tabs" role="tablist">
+  <button class="mode-tab active" id="resultsTab" role="tab" aria-selected="true">Results</button>
+  <button class="mode-tab" id="tableTab" role="tab" aria-selected="false">League table</button>
+</nav>
+
+<main class="grid">
+<div class="work">
+
+<!-- ================= RESULTS MODE ================= -->
+<div id="resultsArea">
+
+  <section class="step">
+    <h2><span class="num">1</span>Find results</h2>
+    <div class="date-strip" id="dateStrip" role="radiogroup" aria-label="Which day"></div>
+    <div class="range-row" id="rangeRow" hidden>
+      <label>From <input type="date" id="rangeStart"></label>
+      <label>To <input type="date" id="rangeEnd"></label>
+      <button class="btn" id="rangeLoad" type="button">Load range</button>
+      <span class="hint">Up to 7 days</span>
+    </div>
+    <div class="feed-bar">
+      <div class="seg" role="radiogroup" aria-label="Leagues">
+        <button type="button" class="seg-btn active" data-filter="english">English leagues</button>
+        <button type="button" class="seg-btn" data-filter="all">All leagues</button>
+      </div>
+      <div class="feed-meta" id="feedMeta">Choose a day to load results.</div>
+      <button class="btn ghost" id="refreshFeed" type="button" hidden>Refresh</button>
+    </div>
+    <div class="feed" id="feed"></div>
+
+    <details class="tools">
+      <summary>Testing tools</summary>
+      <div class="tools-body">
+        <div class="manual">
+          <div class="manual-grid">
+            <label>Home team<input id="manualHome" value="Arsenal"></label>
+            <label>Score<input id="manualHomeScore" type="number" min="0" value="3"></label>
+            <label>Away team<input id="manualAway" value="Chelsea"></label>
+            <label>Score<input id="manualAwayScore" type="number" min="0" value="2"></label>
+            <label class="wide">Home scorers<input id="manualHomeScorers" value="Saka, Saka, Havertz"></label>
+            <label class="wide">Away scorers<input id="manualAwayScorers" value="Palmer, Jackson"></label>
+          </div>
+          <p class="hint">Separate scorers with commas. Repeat a name for each goal, so “Saka, Saka” shows as Saka 2.</p>
+          <div class="btns">
+            <label class="inline">Add to <select id="manualTarget"><option value="1">Page 1</option><option value="2">Page 2</option></select></label>
+            <button class="btn" id="manualAdd" type="button">Add manual result</button>
+          </div>
+        </div>
+        <div class="btns">
+          <button class="btn ghost" id="sample1" type="button">Fill page 1 with random results</button>
+          <button class="btn ghost" id="sample2" type="button">Fill page 2 with random results</button>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <section class="step">
+    <h2><span class="num">2</span>Arrange pages</h2>
+    <p class="step-note">Results go to the page showing their competition. An empty page takes on the competition of the first result added to it.</p>
+
+    <div class="page-card" id="page1Card">
+      <div class="page-head">
+        <span class="page-name">Page 1</span>
+        <select id="competition1" class="competition-select" aria-label="Page 1 competition"></select>
+        <span class="count" id="count1"></span>
+      </div>
+      <div class="results-head"><span>Home</span><span>Score</span><span>Away</span><span title="Tick when the match hasn't finished">Late</span><span></span></div>
+      <div id="rows1" class="rows"></div>
+      <div class="btns"><button class="btn ghost" id="add1" type="button">+ Add row</button><button class="btn ghost danger" id="clear1" type="button">Clear page</button></div>
+    </div>
+
+    <div class="page-card" id="page2Card">
+      <div class="page-head">
+        <span class="page-name">Page 2</span>
+        <select id="competition2" class="competition-select" aria-label="Page 2 competition"></select>
+        <span class="count" id="count2"></span>
+        <label class="switch small"><input id="include2" type="checkbox" checked><span>Include</span></label>
+      </div>
+      <div class="results-head"><span>Home</span><span>Score</span><span>Away</span><span title="Tick when the match hasn't finished">Late</span><span></span></div>
+      <div id="rows2" class="rows"></div>
+      <div class="btns"><button class="btn ghost" id="add2" type="button">+ Add row</button><button class="btn ghost danger" id="clear2" type="button">Clear page</button></div>
+    </div>
+  </section>
+
+  <section class="step">
+    <h2><span class="num">3</span>Make the video</h2>
+    <div class="seg format" role="radiogroup" aria-label="Video style">
+      <button type="button" class="seg-btn active" data-format="video">Results video</button>
+      <button type="button" class="seg-btn" data-format="printer">Vidi printer</button>
+    </div>
+    <div class="options">
+      <label class="inline" id="introOpt"><input id="includeMusic" type="checkbox" checked> Intro audio</label>
+      <label class="inline"><input id="mid90sBg" type="checkbox"> Mid-90s loop background</label>
+    </div>
+    <div class="btns"><button class="btn primary" id="generate" type="button">Generate results video</button></div>
+    <div id="status" class="status" role="status"></div>
+    <div id="job" class="job" hidden><div id="jobtext">Rendering…</div><div class="progress"><div id="bar" class="bar"></div></div><a id="download" class="btn primary" href="#" hidden>Download MP4</a></div>
+  </section>
+</div>
+
+<!-- ================= LEAGUE TABLE MODE ================= -->
+<div id="tableArea" hidden>
+  <section class="step">
+    <h2><span class="num">1</span>Load a table</h2>
+    <div class="table-load-row">
+      <label>Competition<select id="tableLeague"><option value="8">Premier League</option><option value="9">Championship</option><option value="12">League One</option><option value="14">League Two</option></select></label>
+      <button class="btn primary" id="loadTable" type="button">Load table</button>
+    </div>
+    <div class="feed-meta" id="tableMeta">No table loaded yet.</div>
+  </section>
+
+  <section class="step">
+    <h2><span class="num">2</span>Display and voiceover</h2>
+    <div class="table-options">
+      <div class="option-box"><b>Display</b><p class="hint">Top half first, then bottom half.</p><label class="inline"><input id="showStats" type="checkbox" checked> Show position, played and points</label><label class="inline"><input id="tableEndLogo" type="checkbox" checked> End with Grandscores identity</label></div>
+      <div class="option-box"><b>Voiceover</b><label class="inline"><input id="tableVO" type="checkbox" checked> Include voiceover</label><label class="inline"><input id="mentionPts" type="checkbox" checked> Mention points totals</label></div>
+      <div class="option-box"><b>Sound and background</b><label class="inline"><input id="tableMusic" type="checkbox" checked> Intro music</label><label class="inline"><input id="tableMid90sBg" type="checkbox"> Mid-90s loop background</label></div>
+    </div>
+    <div class="vo-editor">
+      <label for="tableScriptEditor">Voiceover script</label>
+      <textarea id="tableScriptEditor" rows="7" spellcheck="false">Load a table to generate the voiceover script.</textarea>
+      <div class="btns"><button class="btn" id="confirmTableVO" type="button">Confirm script</button><span id="tableVOStatus" class="hint"></span></div>
+    </div>
+  </section>
+
+  <section class="step">
+    <h2><span class="num">3</span>Make the video</h2>
+    <div class="btns"><button class="btn primary" id="generateTable" type="button">Generate table video</button></div>
+    <div id="tableJob" class="job" hidden><div id="tableJobText">Rendering league table…</div><div class="progress"><div id="tableBar" class="bar"></div></div><div class="hint" id="tableJobSmall"></div><a id="tableDownload" class="btn primary" href="#" hidden>Download MP4</a></div>
+  </section>
+</div>
+</div>
+
+<!-- ================= PREVIEW ================= -->
+<aside class="preview-col">
+  <div class="preview-panel">
+    <div class="preview-head">
+      <span id="previewTitle">Preview</span>
+      <div class="seg small" id="previewPages" role="radiogroup" aria-label="Preview page">
+        <button type="button" class="seg-btn active" data-page="1">Page 1</button>
+        <button type="button" class="seg-btn" data-page="2">Page 2</button>
+      </div>
+      <div class="seg small" id="previewScenes" role="radiogroup" aria-label="Preview half" hidden>
+        <button type="button" class="seg-btn active" data-scene="top">Top half</button>
+        <button type="button" class="seg-btn" data-scene="bottom">Bottom half</button>
+      </div>
+    </div>
+    <div class="preview-frame">
+      <img id="preview" alt="Video preview" hidden>
+      <div class="preview-empty" id="previewEmpty">Add a result to see the graphic.</div>
+    </div>
+  </div>
+</aside>
+</main>
+
+<script src="{{ url_for('static', filename='app.js') }}?v={{ app_version }}"></script>
+</body></html>
