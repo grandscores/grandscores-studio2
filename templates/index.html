@@ -107,7 +107,10 @@
     </div>
     <div class="options">
       <label class="inline" id="introOpt"><input id="includeMusic" type="checkbox" checked> Intro audio</label>
-      <label class="inline"><input id="mid90sBg" type="checkbox"> Mid-90s loop background</label>
+    </div>
+    <div class="bg-field">
+      <span class="field-label">Background</span>
+      <div class="bg-picker" id="resultsBgPicker" role="radiogroup" aria-label="Results background"></div>
     </div>
     <div class="btns"><button class="btn primary" id="generate" type="button">Generate results video</button></div>
     <div id="status" class="status" role="status"></div>
@@ -131,7 +134,11 @@
     <div class="table-options">
       <div class="option-box"><b>Display</b><p class="hint">Top half first, then bottom half.</p><label class="inline"><input id="showStats" type="checkbox" checked> Show position, played and points</label><label class="inline"><input id="tableEndLogo" type="checkbox" checked> End with Grandscores identity</label></div>
       <div class="option-box"><b>Voiceover</b><label class="inline"><input id="tableVO" type="checkbox" checked> Include voiceover</label><label class="inline"><input id="mentionPts" type="checkbox" checked> Mention points totals</label></div>
-      <div class="option-box"><b>Sound and background</b><label class="inline"><input id="tableMusic" type="checkbox" checked> Intro music</label><label class="inline"><input id="tableMid90sBg" type="checkbox"> Mid-90s loop background</label></div>
+      <div class="option-box"><b>Sound</b><label class="inline"><input id="tableMusic" type="checkbox" checked> Intro music</label></div>
+    </div>
+    <div class="bg-field">
+      <span class="field-label">Background</span>
+      <div class="bg-picker" id="tableBgPicker" role="radiogroup" aria-label="League table background"></div>
     </div>
     <div class="vo-editor">
       <label for="tableScriptEditor">Voiceover script</label>
@@ -168,6 +175,7 @@
       <div class="preview-empty" id="previewEmpty">Add a result to see the graphic.</div>
     </div>
     <p class="hint preview-note" id="printerNote" hidden></p>
+    <p class="hint preview-note" id="loopNote" hidden>The Mid-90s loop is animated, so the preview shows the default still. The rendered video uses the loop.</p>
   </div>
 </aside>
 </main>
