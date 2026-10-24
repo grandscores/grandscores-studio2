@@ -16,6 +16,8 @@ const state = {
   added: new Set(),         // fixture ids already on a page
   previewPage: 1,
   printerPage: 0,
+  bg: { results: null, table: null },
+  bgOptions: [],
   liveTimer: null,
 };
 
@@ -325,10 +327,10 @@ async function updatePreview() {
     let url, body;
     if (state.format === 'printer') {
       const ls = allLeagues(); if (!ls.some(l => l.results.length)) { $('previewEmpty').textContent = 'Add a result to see the vidi printer.'; showImage(null); return; }
-      url = '/preview-printer'; body = { leagues: ls, mid90sLoopBackground: $('mid90sBg').checked, page: state.printerPage };
+      url = '/preview-printer'; body = { leagues: ls, background: state.bg.results, page: state.printerPage };
     } else {
       const d = leagueData(state.previewPage); if (!d.results.length) { $('previewEmpty').textContent = `Page ${state.previewPage} is empty. Add a result to see the graphic.`; showImage(null); return; }
-      url = '/preview'; body = d;
+      url = '/preview'; body = { ...d, background: state.bg.results };
     }
     const j = await readJson(await fetch(url, { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), 'Preview');
     if (seq !== previewSeq) return;
@@ -351,6 +353,30 @@ function renderPrinterPager(j) {
   const note = $('printerNote');
   note.hidden = j.page_count < 2;
   note.textContent = `The video prints ${j.page_count} pages: ${j.pages.map(p => p.results).join(', ')} results. Late results are left out.`;
+}
+
+/* ---------------- backgrounds ---------------- */
+function savedBg(kind) { try { return localStorage.getItem('gs-bg-' + kind); } catch (_) { return null; } }
+function saveBg(kind, key) { try { localStorage.setItem('gs-bg-' + kind, key); } catch (_) { } }
+function renderBgPicker(kind) {
+  const el = $(kind === 'results' ? 'resultsBgPicker' : 'tableBgPicker'); el.innerHTML = '';
+  state.bgOptions.forEach(o => {
+    const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'radio');
+    const on = state.bg[kind] === o.key; b.className = 'bg-opt' + (on ? ' active' : ''); b.setAttribute('aria-checked', on);
+    b.innerHTML = `<img src="/background-thumb/${encodeURIComponent(o.key)}" alt="" loading="lazy"><span>${esc(o.label)}</span>`;
+    b.onclick = () => { state.bg[kind] = o.key; saveBg(kind, o.key); renderBgPicker(kind); updateLoopNote(); if (kind === 'results') queuePreview(); else updateTablePreview(); };
+    el.appendChild(b);
+  });
+}
+function updateLoopNote() { $('loopNote').hidden = state.bg[state.mode] !== 'mid90s'; }
+async function loadBackgrounds() {
+  try {
+    const j = await readJson(await fetch('/api/backgrounds'), 'Backgrounds');
+    state.bgOptions = j.backgrounds || [];
+    const keys = new Set(state.bgOptions.map(o => o.key));
+    ['results', 'table'].forEach(kind => { const s = savedBg(kind); state.bg[kind] = keys.has(s) ? s : j.defaults[kind]; renderBgPicker(kind); });
+    updateLoopNote(); queuePreview();
+  } catch (e) { $('resultsBgPicker').textContent = e.message; }
 }
 
 /* ---------------- render jobs ---------------- */
@@ -377,7 +403,7 @@ $('generate').onclick = async () => {
   const long = leagues.flatMap((l, i) => l.results.flatMap(r => [r.home, r.away].filter(t => t.length > MAX_TEAM_CHARS).map(t => `${t} (page ${i + 1})`)));
   setStatus(long.length ? `Long team name may be squeezed: ${long[0]}. Rendering anyway.` : '', 'err');
   const isVideo = state.format === 'video';
-  const body = isVideo ? { leagues, includeIntroMusic: $('includeMusic').checked, mid90sLoopBackground: $('mid90sBg').checked } : { leagues, mid90sLoopBackground: $('mid90sBg').checked };
+  const body = isVideo ? { leagues, includeIntroMusic: $('includeMusic').checked, background: state.bg.results } : { leagues, background: state.bg.results };
   $('job').hidden = false; $('download').hidden = true; $('bar').style.width = '3%'; $('jobtext').textContent = 'Starting render…';
   try {
     const j = await readJson(await fetch(isVideo ? '/generate' : '/generate-printer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), 'Render');
@@ -427,7 +453,7 @@ async function updateTablePreview() {
   if (!tableState.loaded) { $('previewEmpty').textContent = 'Load a table to see the graphic.'; showImage(null); return; }
   try {
     const half = tableHalfCount();
-    const j = await readJson(await fetch('/preview-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ league: tableState.league, topCount: half, bottomCount: half, scene: tableState.scene, showStats: $('showStats').checked, endLogo: $('tableEndLogo').checked }) }), 'Table preview');
+    const j = await readJson(await fetch('/preview-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ league: tableState.league, topCount: half, bottomCount: half, scene: tableState.scene, showStats: $('showStats').checked, endLogo: $('tableEndLogo').checked, background: state.bg.table }) }), 'Table preview');
     showImage(j.image);
   } catch (e) { $('previewEmpty').textContent = e.message; showImage(null); }
 }
@@ -435,7 +461,7 @@ $('generateTable').onclick = async () => {
   if (!tableState.loaded) { $('tableMeta').textContent = 'Load a table first.'; $('tableMeta').classList.add('err'); return; }
   if ($('tableVO').checked && !tableState.voiceoverConfirmed) { voStatus('Confirm the script before rendering.', false); $('tableScriptEditor').focus(); return; }
   const half = tableHalfCount();
-  const d = { league: tableState.league, topCount: half, bottomCount: half, includeVoiceover: $('tableVO').checked, mentionPoints: $('mentionPts').checked, includeIntroMusic: $('tableMusic').checked, endLogo: $('tableEndLogo').checked, voiceoverText: $('tableScriptEditor').value.trim(), mid90sLoopBackground: $('tableMid90sBg').checked };
+  const d = { league: tableState.league, topCount: half, bottomCount: half, includeVoiceover: $('tableVO').checked, mentionPoints: $('mentionPts').checked, includeIntroMusic: $('tableMusic').checked, endLogo: $('tableEndLogo').checked, voiceoverText: $('tableScriptEditor').value.trim(), background: state.bg.table };
   $('tableJob').hidden = false; $('tableDownload').hidden = true; $('tableBar').style.width = '3%'; $('tableJobText').textContent = 'Starting league table render…'; $('tableJobSmall').textContent = '';
   try {
     const j = await readJson(await fetch('/generate-table', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }), 'Table render');
@@ -448,7 +474,7 @@ function setMode(mode) {
   state.mode = mode;
   $('resultsArea').hidden = mode !== 'results'; $('tableArea').hidden = mode !== 'table';
   [['resultsTab', 'results'], ['tableTab', 'table']].forEach(([id, m]) => { $(id).classList.toggle('active', m === mode); $(id).setAttribute('aria-selected', m === mode); });
-  updatePreviewChrome();
+  updatePreviewChrome(); updateLoopNote();
   if (mode === 'results') { queuePreview(); } else { stopLiveTimer(); updateTablePreview(); }
   if (mode === 'results' && state.range.live && state.feedLoaded) loadFeed({ quiet: true });
 }
@@ -459,6 +485,6 @@ $('tableTab').onclick = () => setMode('table');
 [1, 2].forEach(p => { const s = compEl(p); BASE_COMPETITIONS.forEach(c => s.add(new Option(c, c))); });
 compEl(2).value = 'Championship';
 [1, 2].forEach(p => { for (let i = 0; i < 3; i++) addRow(p); });
-buildDateStrip(); syncPreviewLabels(); updateCounts(); setMode('results');
+buildDateStrip(); syncPreviewLabels(); updateCounts(); setMode('results'); loadBackgrounds();
 chooseDay('live');
 if (document.fonts && document.fonts.load) document.fonts.load(`italic 700 ${RESULT_FONT_SIZE}px GrandscoresResult`).then(refreshAllWarnings).catch(() => { });
