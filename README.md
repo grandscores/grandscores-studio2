@@ -72,6 +72,11 @@ assets/              Fonts, artwork, audio and the Mid-90s loop video
 
 ## Changelog
 
+### v5.46
+- Own goals are listed under the team they counted for, with "OG" after the name (e.g. "Penders OG" under Tottenham in Chelsea 0-2 Tottenham). Sportmonks own-goal events are checked against the final score to work out which side the goal belongs to.
+- Manual results accept own goals typed as "Name og" or "Name (og)" in the scorers of the team the goal counted for.
+- Test data now includes an own goal (Sunderland 0-2 Norwich City).
+
 ### v5.45
 - Fixed Vidi Printer renders being killed (SIGKILL) on Railway for running out of memory. Identical frames (pauses, cursor blinks, holds) now reuse the file already written instead of saving a new copy, and still-background renders use JPEG frames. An 11-result render went from about 2 GB of frame files to about 0.2 GB, and renders about 3.5 times faster. The Mid-90s loop keeps transparent PNG frames.
 

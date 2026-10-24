@@ -44,7 +44,7 @@ TABLE_DETAIL_NO_LOGO.putalpha(_alpha)
 FONT_CACHE = {}
 RESULT_FONT_SIZE = 42
 MAX_TEAM_CHARS = 20
-APP_VERSION = '5.45'
+APP_VERSION = '5.46'
 PREVIEW_MAX_AGE = 300
 
 def font(size):
@@ -872,25 +872,34 @@ PRINTER_LINE_GAP=48
 PRINTER_MAX_PER_PAGE=5
 PRINTER_BOTTOM_LIMIT=1480
 
+_OG_SUFFIX=re.compile(r'(?:\s+|\s*[\(\[]\s*)o\.?g\.?\s*[\)\]]?\s*$',re.I)
+
+def _scorer_parts(s):
+    """(display surname, is_own_goal) for one scorer entry. Accepts an og flag
+    or a name typed with 'og' / '(og)' on the end."""
+    name=str(s.get('name') or '').strip(); og=bool(s.get('og'))
+    if _OG_SUFFIX.search(name) and _OG_SUFFIX.sub('',name).strip(): og=True; name=_OG_SUFFIX.sub('',name).strip()
+    if name and ' ' in name: name=name.split()[-1]
+    return name,og
+
 def _printer_scorer_lines(result):
+    """[(side, label, count)] where label is 'Saka' or 'Penders OG'."""
     grouped=[]
     for s in (result.get('scorers') or []):
         if not isinstance(s,dict): continue
-        name=str(s.get('name') or '').strip()
-        if name and ' ' in name:
-            name=name.split()[-1]
+        name,og=_scorer_parts(s)
         side=str(s.get('team') or '').lower()
         if not name or side not in ('home','away'): continue
-        grouped.append((side,name))
+        grouped.append((side,name+(' OG' if og else '')))
     out=[]
     for side in ('home','away'):
         counts={}; order=[]
-        for sc_side,name in grouped:
+        for sc_side,label in grouped:
             if sc_side!=side: continue
-            key=name.lower()
-            if key not in counts: order.append(name); counts[key]=0
+            key=label.lower()
+            if key not in counts: order.append(label); counts[key]=0
             counts[key]+=1
-        out.extend((side,name,counts[name.lower()]) for name in order)
+        out.extend((side,label,counts[label.lower()]) for label in order)
     return out
 
 def _printer_layout(page):
@@ -1332,21 +1341,46 @@ def _elapsed_minutes(starting_at, state_name):
         return max(1,min(90,elapsed))
     except Exception: return None
 
-def _fixture_goalscorers(f, home_id, away_id):
-    events=f.get('events') or []
-    out=[]
-    for e in sorted(events,key=lambda x:(x.get('sort_order') is None,x.get('sort_order') or 0)):
-        tid=e.get('type_id'); typ=e.get('type') or {}; code=str(typ.get('developer_name') or typ.get('code') or '').upper()
-        if tid not in (14,15,16) and code not in ('GOAL','OWNGOAL','PENALTY'): continue
-        name=str(e.get('player_name') or '').strip()
+def _event_is_own_goal(e):
+    typ=e.get('type') or {}
+    code=re.sub(r'[^A-Z]','',str(typ.get('developer_name') or typ.get('code') or typ.get('name') or '').upper())
+    extra=' '.join(str(e.get(k) or '') for k in ('info','addition','result')).lower()
+    return e.get('type_id')==15 or 'OWNGOAL' in code or 'own goal' in extra or 'own-goal' in extra
+
+def _fixture_goalscorers(f, home_id, away_id, home_score=None, away_score=None):
+    """Goal events as [{'name','team','og'}].
+
+    For own goals the team ID Sportmonks attaches can mean either the scorer's
+    own team or the team that benefited, so both readings are checked against
+    the final score and the one that matches is used. 'team' is always the side
+    the goal counted for, so an own goal by a Chelsea player in Chelsea 0-2
+    Tottenham is listed under Tottenham as 'Penders OG'."""
+    events=sorted(f.get('events') or [],key=lambda x:(x.get('sort_order') is None,x.get('sort_order') or 0,x.get('minute') or 0))
+    goals=[]
+    for e in events:
+        tid=e.get('type_id'); typ=e.get('type') or {}
+        code=re.sub(r'[^A-Z]','',str(typ.get('developer_name') or typ.get('code') or '').upper())
+        og=_event_is_own_goal(e)
+        if not og and tid not in (14,16) and code not in ('GOAL','PENALTY'): continue
+        name=str(e.get('player_name') or (e.get('player') or {}).get('display_name') or '').strip()
         if not name: continue
         pid=e.get('participant_id')
-        if code=='OWNGOAL' or tid==15:
-            side='away' if pid==home_id else 'home' if pid==away_id else ''
-        else:
-            side='home' if pid==home_id else 'away' if pid==away_id else ''
-        if side: out.append({'name':name,'team':side})
-    return out
+        side='home' if pid==home_id else 'away' if pid==away_id else ''
+        if side: goals.append({'name':name,'side':side,'og':og})
+    def build(flip_og):
+        out=[]
+        for g in goals:
+            side=g['side']
+            if g['og'] and flip_og: side='away' if side=='home' else 'home'
+            out.append({'name':g['name'],'team':side,'og':g['og']})
+        return out
+    def matches(out):
+        if home_score is None or away_score is None: return False
+        return (sum(1 for x in out if x['team']=='home'),sum(1 for x in out if x['team']=='away'))==(home_score,away_score)
+    flipped,unflipped=build(True),build(False)
+    if any(g['og'] for g in goals) and matches(unflipped) and not matches(flipped): return unflipped
+    return flipped
+
 
 def _normalise_fixture(f):
     participants=f.get('participants') or []
@@ -1360,7 +1394,7 @@ def _normalise_fixture(f):
     scores=f.get('scores') or []
     return {'id':f.get('id'),'league':league.get('name') or f.get('league_name') or '',
             'home':home.get('name') or '','away':away.get('name') or '',
-            'home_score':_score_value(scores,home.get('id')),'away_score':_score_value(scores,away.get('id')),'scorers':_fixture_goalscorers(f,home.get('id'),away.get('id')),
+            'home_score':_score_value(scores,home.get('id')),'away_score':_score_value(scores,away.get('id')),'scorers':_fixture_goalscorers(f,home.get('id'),away.get('id'),_score_value(scores,home.get('id')),_score_value(scores,away.get('id'))),
             'state':state_name,'kind':_fixture_kind(state_name),'time':_format_fixture_time(f.get('starting_at')),'date':_format_fixture_date(f.get('starting_at')),'elapsed_minutes':_elapsed_minutes(f.get('starting_at'),state_name) if _fixture_kind(state_name)=='live' else None}
 
 def _mock_live_fixtures(start=None,end=None):
@@ -1371,7 +1405,7 @@ def _mock_live_fixtures(start=None,end=None):
         ('Premier League','Arsenal','Chelsea',2,1,[('Saka','home'),('Saka','home'),('Palmer','away')]),
         ('Premier League','Liverpool','Everton',3,0,[('Salah','home'),('Gakpo','home'),('Szoboszlai','home')]),
         ('Championship','Leeds United','Middlesbrough',1,1,[('Gnonto','home'),('Latte Lath','away')]),
-        ('Championship','Sunderland','Norwich City',0,2,[('Sargent','away'),('Sainz','away')]),
+        ('Championship','Sunderland','Norwich City',0,2,[('Sargent','away'),('Ballard og','away')]),
         ('League One','Barnsley','Wigan Athletic',0,0,[]),
         ('League Two','Bradford City','Chesterfield',3,2,[('Cook','home'),('Cook','home'),('Pattison','home'),('Mandeville','away'),('Mandeville','away')]),
         ('Scottish Premiership','Celtic','Hibernian',2,0,[('Kuhn','home'),('Maeda','home')]),
