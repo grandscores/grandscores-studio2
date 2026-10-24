@@ -44,7 +44,7 @@ TABLE_DETAIL_NO_LOGO.putalpha(_alpha)
 FONT_CACHE = {}
 RESULT_FONT_SIZE = 42
 MAX_TEAM_CHARS = 20
-APP_VERSION = '5.44'
+APP_VERSION = '5.45'
 PREVIEW_MAX_AGE = 300
 
 def font(size):
@@ -1049,6 +1049,22 @@ def _make_printer_sfx(path, events, duration):
             out.extend(struct.pack('<h',v))
         w.writeframes(out)
 
+def _printer_emit(cache, data, page_index, states, cursor_on, transparent, path):
+    """Write one printer frame. Most frames repeat an earlier picture (pauses,
+    the blinking cursor, holds while the voiceover reads), so identical frames
+    are hard-linked to the file already written instead of being drawn and saved
+    again. This cut an 11-result render from ~2 GB of frames to a fraction of
+    that, which is what was exhausting memory on Railway."""
+    key=(page_index,bool(cursor_on),tuple(sorted(((str(k),v) for k,v in states.items()),key=lambda kv:kv[0])))
+    first=cache.get(key)
+    if first is not None:
+        try: os.link(first,path); return
+        except OSError: shutil.copyfile(first,path); return
+    im=make_printer_frame(data,page_index,states,cursor_on=cursor_on,transparent=transparent)
+    if str(path).endswith('.jpg'): im.convert('RGB').save(path,'JPEG',quality=95,subsampling=0)
+    else: _write_animated_png_frame(im,path)
+    cache[key]=path
+
 def render_printer_video(data,out_path,job_id):
     pages=_printer_paginate(data); animated=animated_background_enabled(data)
     with tempfile.TemporaryDirectory(prefix='grandscores_printer_') as td0:
@@ -1068,6 +1084,10 @@ def render_printer_video(data,out_path,job_id):
                     JOBS[job_id]['progress']=3+int(done_results/max(total_results,1)*12)
                     JOBS[job_id]['message']=f'Generating voiceover: result {done_results} of {total_results}…'
 
+        frame_cache={}
+        # The Mid-90s loop needs transparent PNG frames; still backgrounds use
+        # high-quality JPEG frames, roughly a fifth of the size on disk.
+        frame_ext='png' if animated else 'jpg'
         frame_no=1; total=0; timeline=0.0; sfx_events=[]; voice_delays=[]; voice_index=0
         rng=random.Random()
         for pi,page in enumerate(pages):
@@ -1084,8 +1104,7 @@ def render_printer_video(data,out_path,job_id):
                     states[(idx,'result')]=0
                     states['_active']=(idx,'result')
                     for pf in range(pause_frames):
-                        im=make_printer_frame(data,pi,states,cursor_on=((pf//12)%2==0),transparent=animated)
-                        _write_animated_png_frame(im,frame_dir/f'{frame_no:06d}.png'); frame_no+=1; total+=1
+                        _printer_emit(frame_cache,data,pi,states,((pf//12)%2==0),animated,frame_dir/f'{frame_no:06d}.{frame_ext}'); frame_no+=1; total+=1
                     states['_active']=None
                     timeline += pause_frames/FPS
 
@@ -1107,8 +1126,7 @@ def render_printer_video(data,out_path,job_id):
                 # characters.
                 for n in range(1,len(result)+1):
                     states[(idx,'result')]=n; states['_active']=(idx,'result')
-                    im=make_printer_frame(data,pi,states,cursor_on=(((n-1)//2)%2==0),transparent=animated)
-                    _write_animated_png_frame(im,frame_dir/f'{frame_no:06d}.png'); sfx_events.append(timeline); frame_no+=1; total+=1; timeline+=1/FPS
+                    _printer_emit(frame_cache,data,pi,states,(((n-1)//2)%2==0),animated,frame_dir/f'{frame_no:06d}.{frame_ext}'); sfx_events.append(timeline); frame_no+=1; total+=1; timeline+=1/FPS
                 for si in range(max_sc):
                     for side in ('home','away'):
                         arr=[x for x in scorer_lines if x[0]==side]
@@ -1116,8 +1134,7 @@ def render_printer_video(data,out_path,job_id):
                         text=arr[si][1]+(f" {arr[si][2]}" if arr[si][2]>1 else '')
                         for n in range(1,len(text)+1):
                             states[(idx,side,si)]=n; states['_active']=(idx,side,si)
-                            im=make_printer_frame(data,pi,states,cursor_on=(((n-1)//2)%2==0),transparent=animated)
-                            _write_animated_png_frame(im,frame_dir/f'{frame_no:06d}.png'); sfx_events.append(timeline); frame_no+=1; total+=1; timeline+=1/FPS
+                            _printer_emit(frame_cache,data,pi,states,(((n-1)//2)%2==0),animated,frame_dir/f'{frame_no:06d}.{frame_ext}'); sfx_events.append(timeline); frame_no+=1; total+=1; timeline+=1/FPS
 
                 # Keep the fully revealed result on screen until its VO has
                 # finished, then leave a small clean hold before the next pause.
@@ -1128,13 +1145,11 @@ def render_printer_video(data,out_path,job_id):
                 hold=max(0.25,desired_end-timeline)
                 hold_frames=max(1,int(round(hold*FPS)))
                 for h in range(hold_frames):
-                    im=make_printer_frame(data,pi,states,cursor_on=False,transparent=animated)
-                    _write_animated_png_frame(im,frame_dir/f'{frame_no:06d}.png'); frame_no+=1; total+=1; timeline+=1/FPS
+                    _printer_emit(frame_cache,data,pi,states,False,animated,frame_dir/f'{frame_no:06d}.{frame_ext}'); frame_no+=1; total+=1; timeline+=1/FPS
 
             # Small clean end-of-page hold.
             for _ in range(25):
-                im=make_printer_frame(data,pi,states,cursor_on=False,transparent=animated)
-                _write_animated_png_frame(im,frame_dir/f'{frame_no:06d}.png'); frame_no+=1; total+=1; timeline+=1/FPS
+                _printer_emit(frame_cache,data,pi,states,False,animated,frame_dir/f'{frame_no:06d}.{frame_ext}'); frame_no+=1; total+=1; timeline+=1/FPS
             with LOCK:
                 JOBS[job_id]['progress']=15+int((pi+1)/len(pages)*55)
                 JOBS[job_id]['message']=f'Rendering Vidi Printer page {pi+1} of {len(pages)}…'
@@ -1155,7 +1170,7 @@ def render_printer_video(data,out_path,job_id):
             silent=td/'printer_video.mp4'; _encode_animated_foreground(frame_dir,silent,total)
         else:
             silent=td/'printer_video.mp4'
-            run_ffmpeg(['ffmpeg','-y','-loglevel','error','-framerate',str(FPS),'-i',str(frame_dir/'%06d.png'),'-c:v','libx264','-preset','ultrafast','-threads','1','-crf','23','-pix_fmt','yuv420p','-movflags','+faststart',str(silent)])
+            run_ffmpeg(['ffmpeg','-y','-loglevel','error','-framerate',str(FPS),'-i',str(frame_dir/'%06d.jpg'),'-c:v','libx264','-preset','ultrafast','-threads','1','-crf','23','-pix_fmt','yuv420p','-movflags','+faststart',str(silent)])
         run_ffmpeg(['ffmpeg','-y','-loglevel','error','-i',str(silent),'-i',str(audio),'-map','0:v','-map','1:a','-c:v','copy','-c:a','aac','-b:a','128k','-shortest','-movflags','+faststart',str(out_path)])
 
 def _render_filename(data, kind):
