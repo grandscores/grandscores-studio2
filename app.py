@@ -44,7 +44,7 @@ TABLE_DETAIL_NO_LOGO.putalpha(_alpha)
 FONT_CACHE = {}
 RESULT_FONT_SIZE = 42
 MAX_TEAM_CHARS = 20
-APP_VERSION = '5.42'
+APP_VERSION = '5.44'
 PREVIEW_MAX_AGE = 300
 
 def font(size):
@@ -106,7 +106,7 @@ def clean_leagues(data):
                 except: return None
             results.append({'home':home,'away':away,'homeScore':None if late else num(hs),'awayScore':None if late else num(aws),'scorers':list(r.get('scorers') or [])})
         leagues.append({'competition':str(item.get('competition') or 'Competition'), 'results':results})
-    return {'leagues':leagues,'includeIntroMusic':bool(data.get('includeIntroMusic',True)),'mid90sLoopBackground':bool(data.get('mid90sLoopBackground',False))}
+    return {'leagues':leagues,'includeIntroMusic':bool(data.get('includeIntroMusic',True)),'mid90sLoopBackground':bool(data.get('mid90sLoopBackground',False)),'background':data.get('background')}
 
 def clean_results(data):
     """Compatibility helper used by the preview endpoint."""
@@ -148,12 +148,70 @@ def validate_results(data):
                 if not text:
                     raise ValueError(f'Results {li}, result {i}: {key} text is empty.')
 
+BACKGROUND_DIR = ASSETS / 'backgrounds'
+BUILTIN_BACKGROUNDS = [
+    ('classic', 'Classic (two players)', BG_PATH),
+    ('striker', 'Striker', TABLE_BG_PATH),
+]
+DEFAULT_BACKGROUND = {'results': 'classic', 'printer': 'classic', 'table': 'striker'}
+_BG_CACHE = {}
+_render_ctx = threading.local()
+
+def _fit_cover(im):
+    """Scale and centre-crop any image to the 1080x1920 video frame."""
+    im = im.convert('RGBA')
+    if im.size == (W, H): return im
+    scale = max(W / im.width, H / im.height)
+    im = im.resize((max(W, round(im.width * scale)), max(H, round(im.height * scale))), Image.LANCZOS)
+    left = (im.width - W) // 2; top = (im.height - H) // 2
+    return im.crop((left, top, left + W, top + H))
+
+def background_options():
+    """Built-in stills, any image added to assets/backgrounds/, then the Mid-90s loop."""
+    opts = [{'key': k, 'label': label, 'path': p} for k, label, p in BUILTIN_BACKGROUNDS if p.exists()]
+    if BACKGROUND_DIR.is_dir():
+        for p in sorted(BACKGROUND_DIR.iterdir()):
+            if p.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp') and not p.name.startswith('.'):
+                key = 'custom-' + re.sub(r'[^a-z0-9]+', '-', p.stem.lower()).strip('-')
+                opts.append({'key': key, 'label': p.stem.replace('_', ' ').replace('-', ' ').strip().title(), 'path': p})
+    if MID90S_BG_PATH.exists():
+        opts.append({'key': 'mid90s', 'label': 'Mid-90s loop (animated)', 'path': None})
+    return opts
+
+def normalise_background(data, kind):
+    """Settle data['background'] to a valid key. Older clients that only send
+    mid90sLoopBackground keep working."""
+    keys = {o['key'] for o in background_options()}
+    choice = str(data.get('background') or '').strip()
+    if choice not in keys:
+        choice = 'mid90s' if data.get('mid90sLoopBackground') and 'mid90s' in keys else DEFAULT_BACKGROUND[kind]
+    data['background'] = choice
+    data['mid90sLoopBackground'] = choice == 'mid90s'
+    return choice
+
+def still_background(key):
+    """RGBA still for a background key (the Mid-90s loop has none, so use the default)."""
+    if key not in _BG_CACHE:
+        opt = next((o for o in background_options() if o['key'] == key and o['path']), None)
+        if not opt: return None
+        _BG_CACHE[key] = _fit_cover(Image.open(opt['path']))
+    return _BG_CACHE[key]
+
+def use_background(key):
+    """Select the still background for frames drawn on this thread (one render or preview)."""
+    _render_ctx.background = key
+
+def current_still(kind):
+    key = getattr(_render_ctx, 'background', None)
+    im = still_background(key) if key and key != 'mid90s' else None
+    return (im or still_background(DEFAULT_BACKGROUND[kind])).copy()
+
 def animated_background_enabled(data):
     return bool(data.get('mid90sLoopBackground')) and MID90S_BG_PATH.exists()
 
 def make_frame(data, reveal_index=None, progress=1.0, transparent=False):
     results=data['results'][:12]
-    base=(Image.new('RGBA',(W,H),(0,0,0,0)) if transparent else STATIC_RGB.copy().convert('RGBA'))
+    base=(Image.new('RGBA',(W,H),(0,0,0,0)) if transparent else current_still('results'))
     sections=data.get('sections') or [{'competition':data['competition'],'results':results}]
     combined=bool(data.get('sections'))
     if not combined:
@@ -557,7 +615,7 @@ def _table_detail_for_data(data):
     return shifted
 
 def make_table_frame(data, reveal_index=None, progress=1.0, scene='top', transparent=False):
-    bg=Image.new('RGBA',(W,H),(0,0,0,0)) if transparent else TABLE_BG.copy()
+    bg=Image.new('RGBA',(W,H),(0,0,0,0)) if transparent else current_still('table')
     label_underlay = bg.crop((160,462,279,559)) if scene=='bottom' else None
     bg.alpha_composite(_table_detail_for_data(data),(0,0))
     if scene=='bottom': _draw_table_label(bg,'Bottom',label_underlay)
@@ -914,7 +972,7 @@ def _printer_result_line(base,result,visible_chars,font_obj,cursor_on=True,y=PRI
         _printer_draw_cursor(base,cx,y,font_obj,True)
 
 def make_printer_frame(data, page_index=0, line_states=None, cursor_on=True, transparent=False):
-    base=Image.new('RGBA',(W,H),(0,0,0,0)) if transparent else STATIC.copy()
+    base=Image.new('RGBA',(W,H),(0,0,0,0)) if transparent else current_still('printer')
     pages=_printer_paginate(data)
     page=pages[min(page_index,len(pages)-1)]
     title=(page[0][0] if page else 'Full Time Results').upper()
@@ -1115,6 +1173,7 @@ def _render_filename(data, kind):
 
 
 def render_table_job(job_id,data):
+    use_background(data.get('background'))
     with RENDER_LOCK:
         try:
             with LOCK:JOBS[job_id].update(status='rendering',progress=2,message='Preparing league table…')
@@ -1166,6 +1225,7 @@ def render_table_job(job_id,data):
             with LOCK:JOBS[job_id].update(status='error',progress=100,message=f'Table render failed: {e}')
 
 def render_job(job_id,data):
+    use_background(data.get('background'))
     with RENDER_LOCK:
         try:
             with LOCK: JOBS[job_id].update(status='rendering',progress=2,message='Preparing voiceovers…')
@@ -1546,7 +1606,8 @@ def api_live_scores_test_empty():
 
 @app.post('/preview')
 def preview():
-    data=clean_results(request.get_json(force=True)); im=make_frame(data,None,1.0)
+    raw=request.get_json(force=True) or {}; use_background(normalise_background(dict(raw),'results'))
+    data=clean_results(raw); im=make_frame(data,None,1.0)
     from io import BytesIO
     b=BytesIO(); im.save(b,'JPEG',quality=82, optimize=True);
     return jsonify(image='data:image/jpeg;base64,'+base64.b64encode(b.getvalue()).decode('ascii'))
@@ -1557,6 +1618,7 @@ def preview_table():
     data=request.get_json(force=True) or {}; league=data.get('league') or {}; rows=league.get('rows') or []
     if not rows:return jsonify(error='Load a league table first.'),400
     data['name']=league.get('name') or 'League'; data['league_id']=league.get('league_id', league.get('id', data.get('league_id',0))); data['rows']=rows; data['endLogo']=bool(data.get('endLogo',True)); data['scene']=data.get('scene','top')
+    use_background(normalise_background(data,'table'))
     im=make_table_frame(data,None,1.0,data['scene']); from io import BytesIO; b=BytesIO(); im.save(b,'JPEG',quality=84,optimize=True); return jsonify(image='data:image/jpeg;base64,'+base64.b64encode(b.getvalue()).decode('ascii'))
 
 @app.post('/generate-table')
@@ -1564,6 +1626,7 @@ def generate_table():
     data=request.get_json(force=True) or {}; league=data.get('league') or {}; rows=league.get('rows') or []
     if not rows:return jsonify(error='Load a league table first.'),400
     data['name']=league.get('name') or 'League'; data['league_id']=league.get('league_id', league.get('id', data.get('league_id',0))); data['rows']=rows; data['includeVoiceover']=bool(data.get('includeVoiceover',True)); data['mentionPoints']=bool(data.get('mentionPoints',True)); data['includeIntroMusic']=bool(data.get('includeIntroMusic',True)); data['endLogo']=bool(data.get('endLogo',True)); data['mid90sLoopBackground']=bool(data.get('mid90sLoopBackground',False))
+    normalise_background(data,'table')
     job_id=uuid.uuid4().hex[:12]
     with LOCK:JOBS[job_id]={'status':'queued','progress':1,'message':'Queued league table render…'}
     threading.Thread(target=render_table_job,args=(job_id,data),daemon=True).start(); return jsonify(id=job_id)
@@ -1572,6 +1635,7 @@ def generate_table():
 @app.post('/preview-printer')
 def preview_printer():
     raw=request.get_json(force=True) or {}; data=clean_leagues(raw)
+    use_background(normalise_background(data,'printer'))
     pages=_printer_paginate(data)
     try: page=max(0,min(int(raw.get('page',0)),len(pages)-1))
     except Exception: page=0
@@ -1583,7 +1647,7 @@ def preview_printer():
 
 @app.post('/generate-printer')
 def generate_printer():
-    data=clean_leagues(request.get_json(force=True))
+    data=clean_leagues(request.get_json(force=True)); normalise_background(data,'printer')
     if not any(x.get('results') for x in data['leagues']): return jsonify(error='Add at least one result first.'),400
     job_id=uuid.uuid4().hex[:12]
     with LOCK:JOBS[job_id]={'status':'queued','progress':1,'message':'Queued Vidi Printer render…'}
@@ -1592,6 +1656,7 @@ def generate_printer():
     return jsonify(id=job_id)
 
 def _printer_job(job_id,data,out):
+    use_background(data.get('background'))
     with RENDER_LOCK:
         try:
             with LOCK:JOBS[job_id].update(status='rendering',progress=3,message='Rendering Results Vidi Printer…')
@@ -1603,7 +1668,7 @@ def _printer_job(job_id,data,out):
 
 @app.post('/generate')
 def generate():
-    data=clean_leagues(request.get_json(force=True))
+    data=clean_leagues(request.get_json(force=True)); normalise_background(data,'results')
     if not data['leagues'] or not data['leagues'][0]['results']: return jsonify(error='Add at least one result to Results 1.'),400
     if len(data['leagues'])==2 and not data['leagues'][1]['results']: return jsonify(error='Results 2 is enabled but has no results.'),400
     try:
@@ -1614,6 +1679,29 @@ def generate():
     with LOCK: JOBS[job_id]={'status':'queued','progress':1,'message':'Queued…'}
     threading.Thread(target=render_job,args=(job_id,data),daemon=True).start()
     return jsonify(id=job_id)
+
+@app.get('/api/backgrounds')
+def api_backgrounds():
+    return jsonify(backgrounds=[{'key':o['key'],'label':o['label']} for o in background_options()], defaults=DEFAULT_BACKGROUND)
+
+@app.get('/background-thumb/<key>')
+def background_thumb(key):
+    if key == 'mid90s':
+        if 'mid90s-thumb' not in _BG_CACHE:
+            try:
+                raw = subprocess.run(['ffmpeg', '-loglevel', 'error', '-ss', '2', '-i', str(MID90S_BG_PATH), '-frames:v', '1',
+                                      '-vf', 'scale=135:240', '-f', 'image2pipe', '-vcodec', 'png', '-'], capture_output=True, check=True).stdout
+                from io import BytesIO
+                _BG_CACHE['mid90s-thumb'] = Image.open(BytesIO(raw)).convert('RGB')
+            except Exception: abort(404)
+        im = _BG_CACHE['mid90s-thumb']
+    else:
+        im = still_background(key)
+        if im is None: abort(404)
+        im = im.convert('RGB').resize((135, 240))
+    from io import BytesIO
+    b = BytesIO(); im.save(b, 'JPEG', quality=80); b.seek(0)
+    return send_file(b, mimetype='image/jpeg', max_age=3600)
 
 @app.get('/status/<job_id>')
 def status(job_id):

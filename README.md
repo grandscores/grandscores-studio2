@@ -72,6 +72,15 @@ assets/              Fonts, artwork, audio and the Mid-90s loop video
 
 ## Changelog
 
+### v5.44
+- Background picker (with thumbnails) in step 3 of Results and step 2 of League table: Classic (two players), Striker, or the Mid-90s loop. Each tab remembers its choice in the browser.
+- Results Video and Vidi Printer can now use the Striker image, and the League table can use Classic.
+- Any image added to `assets/backgrounds/` appears in the picker automatically (scaled and centre-cropped to 1080×1920).
+- New endpoints: `/api/backgrounds` and `/background-thumb/<key>`. The older `mid90sLoopBackground` flag still works.
+
+### v5.43
+- Removed the white glow around the Grandscores logo at the bottom of the Results Video (`assets/identity.png`). The logo keeps its position.
+
 ### v5.42
 - Results Video and Vidi Printer voiceovers share one script line. The away score now runs straight on from the away team ("Wigan Athletic nill.") with no comma or pause, so it is read flat and falling rather than stressed.
 - ElevenLabs requests send steadier voice settings: stability 0.70, similarity 0.75, style 0. Each can be changed with the optional Railway variables `ELEVENLABS_STABILITY`, `ELEVENLABS_SIMILARITY`, `ELEVENLABS_STYLE` and `ELEVENLABS_SPEED`.
