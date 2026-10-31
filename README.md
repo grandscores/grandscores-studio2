@@ -72,6 +72,13 @@ assets/              Fonts, artwork, audio and the Mid-90s loop video
 
 ## Changelog
 
+### v5.48
+- Voiceover: a subtle 0.1-second pause is back between the away team and its score, without the comma that made the score sound stressed. Adjustable with the optional Railway variable `VO_AWAY_SCORE_PAUSE` (0 to 0.5 seconds).
+
+### v5.47
+- Fixed Mid-90s loop renders (Results Video, League table and Vidi Printer) being killed (SIGKILL) for running out of memory. FFmpeg now decodes the loop video and frame images with one thread; previously it used one per CPU the host reports, roughly tripling memory use (433 MB vs 160 MB measured with 16 threads).
+- Identical transparent foreground frames are hard-linked rather than saved again (a two-page results render went from 1,104 frame files to 72).
+
 ### v5.46
 - Own goals are listed under the team they counted for, with "OG" after the name (e.g. "Penders OG" under Tottenham in Chelsea 0-2 Tottenham). Sportmonks own-goal events are checked against the final score to work out which side the goal belongs to.
 - Manual results accept own goals typed as "Name og" or "Name (og)" in the scorers of the team the goal counted for.

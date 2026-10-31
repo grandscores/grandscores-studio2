@@ -1,4 +1,4 @@
-import base64, json, os, re, random, subprocess, tempfile, threading, time, uuid, shutil, urllib.request, urllib.error, urllib.parse
+import base64, hashlib, json, os, re, random, subprocess, tempfile, threading, time, uuid, shutil, urllib.request, urllib.error, urllib.parse
 from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -44,7 +44,7 @@ TABLE_DETAIL_NO_LOGO.putalpha(_alpha)
 FONT_CACHE = {}
 RESULT_FONT_SIZE = 42
 MAX_TEAM_CHARS = 20
-APP_VERSION = '5.46'
+APP_VERSION = '5.48'
 PREVIEW_MAX_AGE = 300
 
 def font(size):
@@ -305,14 +305,24 @@ def vo_score_word(value):
     if value==0: return 'nill'
     return {1:'one',2:'two',3:'three',4:'four',5:'five',6:'six',7:'seven',8:'eight',9:'nine',10:'ten'}.get(value,str(value))
 
-def vo_result_line(home, away, home_score, away_score):
-    """One spoken result, e.g. 'Oxford United, [pause] two. [pause] Wigan Athletic one.'
+def vo_away_score_pause():
+    """Seconds of silence between the away team and its score. Short enough to
+    stay subtle, long enough to separate the two scores. Adjustable with the
+    Railway variable VO_AWAY_SCORE_PAUSE (0 to 0.5)."""
+    try: return max(0.0,min(0.5,float(os.getenv('VO_AWAY_SCORE_PAUSE','0.1'))))
+    except (TypeError,ValueError): return 0.1
 
-    The away score runs straight on from the away team with no comma or pause and
-    closes with a full stop, so it reads as the end of a sentence and falls in
-    pitch instead of being lifted and stressed as a separate reveal."""
+def vo_result_line(home, away, home_score, away_score):
+    """One spoken result, e.g.
+    'Oxford United, [0.18s] two. [0.24s] Wigan Athletic [0.1s] one.'
+
+    The short pause before the away score separates the two scores. There is
+    deliberately no comma there: a comma made the voice lift and stress the
+    away score instead of letting it fall flat at the end of the sentence."""
+    pause=vo_away_score_pause()
+    gap=f' <break time="{pause:.2f}s" /> ' if pause>0 else ' '
     return (f"{home}, <break time=\"0.18s\" /> {vo_score_word(home_score)}. "
-            f"<break time=\"0.24s\" /> {away} {vo_score_word(away_score)}.")
+            f"<break time=\"0.24s\" /> {away}{gap}{vo_score_word(away_score)}.")
 
 def script_lines(data):
     lines=[f"{data['competition']} Division."]
@@ -419,9 +429,26 @@ def make_audio_multi(data,td,job_id):
     out=td/'voice_all.mp3'; run_ffmpeg(['ffmpeg','-y','-loglevel','error','-f','concat','-safe','0','-i',str(catall),'-c','copy',str(out)])
     return out,durations,data
 
+_FRAME_SEEN={}  # frame folder -> {picture fingerprint: first file written}
+
 def _write_animated_png_frame(frame, path):
+    """Save one transparent foreground frame for the Mid-90s loop renders.
+
+    Most frames repeat an earlier picture (the long hold while the voiceover
+    reads, pauses between rows), so a frame identical to one already in this
+    folder is hard-linked to that file instead of being encoded and written
+    again. Writing thousands of full-size copies was exhausting memory on
+    Railway and getting FFmpeg killed (SIGKILL)."""
+    path=Path(path)
+    seen=_FRAME_SEEN.setdefault(str(path.parent),{})
+    key=hashlib.blake2b(frame.mode.encode()+frame.tobytes(),digest_size=16).digest()
+    first=seen.get(key)
+    if first is not None and first.exists():
+        try: os.link(first,path); return
+        except OSError: pass
     # Low compression keeps rendering fast while preserving the alpha channel.
     frame.save(path, format='PNG', compress_level=1)
+    seen[key]=path
 
 def _encode_animated_foreground(frame_dir, out_path, total_frames):
     # The background is already native 1080x1920/25fps. Keep it as a real
@@ -435,13 +462,18 @@ def _encode_animated_foreground(frame_dir, out_path, total_frames):
     # continuously looping native video stream.
     cmd=['ffmpeg','-y','-loglevel','error',
          '-filter_threads','1','-filter_complex_threads','1',
-         '-thread_queue_size','4','-stream_loop','-1','-i',str(MID90S_BG_PATH),
-         '-thread_queue_size','4','-framerate',str(FPS),'-i',str(frame_dir/'%06d.png'),
+         # '-threads 1' before each '-i' limits the DECODERS. Without it FFmpeg
+         # decodes the loop video with one thread per CPU the host reports
+         # (many on Railway), each holding full 1080x1920 frames: measured at
+         # 433 MB with 16 threads versus 160 MB with one.
+         '-thread_queue_size','4','-stream_loop','-1','-threads','1','-i',str(MID90S_BG_PATH),
+         '-thread_queue_size','4','-threads','1','-framerate',str(FPS),'-i',str(frame_dir/'%06d.png'),
          '-filter_complex','[0:v][1:v]overlay=0:0:format=auto[v]',
          '-map','[v]','-frames:v',str(total_frames),
          '-c:v','libx264','-preset','ultrafast','-threads','1','-crf','23',
          '-pix_fmt','yuv420p','-movflags','+faststart',str(out_path)]
-    run_ffmpeg(cmd)
+    try: run_ffmpeg(cmd)
+    finally: _FRAME_SEEN.pop(str(frame_dir),None)
 
 def stream_video_multi(data,durations,out_path,job_id,extra_tail_seconds=0.0):
     data=combine_small_result_sets(data)
@@ -1179,7 +1211,8 @@ def render_printer_video(data,out_path,job_id):
             silent=td/'printer_video.mp4'; _encode_animated_foreground(frame_dir,silent,total)
         else:
             silent=td/'printer_video.mp4'
-            run_ffmpeg(['ffmpeg','-y','-loglevel','error','-framerate',str(FPS),'-i',str(frame_dir/'%06d.jpg'),'-c:v','libx264','-preset','ultrafast','-threads','1','-crf','23','-pix_fmt','yuv420p','-movflags','+faststart',str(silent)])
+            run_ffmpeg(['ffmpeg','-y','-loglevel','error','-threads','1','-framerate',str(FPS),'-i',str(frame_dir/'%06d.jpg'),'-c:v','libx264','-preset','ultrafast','-threads','1','-crf','23','-pix_fmt','yuv420p','-movflags','+faststart',str(silent)])
+        _FRAME_SEEN.pop(str(frame_dir),None)
         run_ffmpeg(['ffmpeg','-y','-loglevel','error','-i',str(silent),'-i',str(audio),'-map','0:v','-map','1:a','-c:v','copy','-c:a','aac','-b:a','128k','-shortest','-movflags','+faststart',str(out_path)])
 
 def _render_filename(data, kind):
