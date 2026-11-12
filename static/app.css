@@ -189,3 +189,8 @@ select,input[type=date],input:not([type=checkbox]){background:var(--field);borde
 .bg-opt:hover{border-color:var(--line-2)}
 .bg-opt.active{border-color:var(--gold);color:var(--text)}
 @media(max-width:560px){.bg-opt{width:80px}}
+
+/* results-available dot on day buttons */
+.chip .has-results{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--live-hi);margin-left:6px;vertical-align:2px;box-shadow:0 0 0 2px rgba(47,183,124,.25)}
+.chip.active .has-results{background:#7dffb9}
+.chip.live.active .has-results{background:#d9ffe9}

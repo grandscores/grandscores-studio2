@@ -18,6 +18,7 @@ const state = {
   printerPage: 0,
   bg: { results: null, table: null },
   bgOptions: [],
+  dayCounts: {},
   liveTimer: null,
 };
 
@@ -62,6 +63,29 @@ function buildDateStrip() {
   $('rangeStart').max = today; $('rangeEnd').max = today;
   $('rangeStart').value = isoDay(daysAgo(6)); $('rangeEnd').value = today;
 }
+/* Green dot on day buttons that have results (finished or in play) for the current league filter. */
+function chipDate(key) { return key === 'live' ? isoDay(new Date()) : key; }
+function renderDayDots() {
+  document.querySelectorAll('.chip').forEach(c => {
+    if (c.dataset.key === 'range') return;
+    const counts = state.dayCounts[chipDate(c.dataset.key)] || {};
+    const n = state.filter === 'english' ? counts.english : counts.all;
+    let dot = c.querySelector('.has-results');
+    if (n) {
+      if (!dot) { dot = document.createElement('span'); dot.className = 'has-results'; c.querySelector('b').appendChild(dot); }
+      dot.title = `${n} result${n === 1 ? '' : 's'} available`; c.setAttribute('aria-description', dot.title);
+    } else if (dot) { dot.remove(); c.removeAttribute('aria-description'); }
+  });
+}
+async function loadDayCounts() {
+  const p = new URLSearchParams({ start: isoDay(daysAgo(6)), end: isoDay(new Date()) });
+  if (testMode()) p.set('mode', 'test');
+  try { const j = await readJson(await fetch('/api/fixture-days?' + p, { cache: 'no-store' }), 'Day check'); state.dayCounts = j.days || {}; }
+  catch (e) { state.dayCounts = {}; }
+  renderDayDots();
+}
+setInterval(loadDayCounts, 10 * 60 * 1000);
+
 function markChip(key) {
   document.querySelectorAll('.chip').forEach(c => { const on = c.dataset.key === key; c.classList.toggle('active', on); c.setAttribute('aria-checked', on); });
 }
@@ -108,7 +132,7 @@ $('refreshFeed').onclick = () => loadFeed();
 document.querySelectorAll('[data-filter]').forEach(b => b.onclick = () => {
   state.filter = b.dataset.filter;
   document.querySelectorAll('[data-filter]').forEach(x => x.classList.toggle('active', x === b));
-  renderFeed(); // filter locally; no new request
+  renderFeed(); renderDayDots(); // filter locally; no new request
 });
 
 function visibleFixtures() {
@@ -170,9 +194,12 @@ function ensureCompetitionOption(name) {
   [1, 2].forEach(p => { const s = compEl(p); if (![...s.options].some(o => o.value === name)) s.add(new Option(name, name)); });
 }
 /** Decide which page a league's results belong on. */
+function enablePage2() { if (!$('include2').checked) { $('include2').checked = true; $('page2Card').classList.remove('off'); } }
 function routeLeague(league) {
-  for (const p of [1, 2]) if (pageEnabled(p) && compEl(p).value === league && filledRows(p).length < MAX_ROWS) return p;
-  for (const p of [1, 2]) if (pageEnabled(p) && !filledRows(p).length) { ensureCompetitionOption(league); compEl(p).value = league; syncPreviewLabels(); return p; }
+  // 1. a page already holding this competition, with room
+  for (const p of [1, 2]) if (filledRows(p).length && compEl(p).value === league && filledRows(p).length < MAX_ROWS) { if (p === 2) enablePage2(); return p; }
+  // 2. the first empty page; page 2 switches itself on when it's needed
+  for (const p of [1, 2]) if (!filledRows(p).length) { ensureCompetitionOption(league); compEl(p).value = league; if (p === 2) enablePage2(); syncPreviewLabels(); return p; }
   return null;
 }
 function addFixtures(league, list) {
@@ -294,6 +321,7 @@ $('manualAdd').onclick = () => {
 };
 $('testMode').onchange = () => {
   $('testBanner').hidden = !testMode();
+  loadDayCounts();
   if (state.mode === 'results') loadFeed();
 };
 
@@ -364,18 +392,17 @@ function renderBgPicker(kind) {
     const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'radio');
     const on = state.bg[kind] === o.key; b.className = 'bg-opt' + (on ? ' active' : ''); b.setAttribute('aria-checked', on);
     b.innerHTML = `<img src="/background-thumb/${encodeURIComponent(o.key)}" alt="" loading="lazy"><span>${esc(o.label)}</span>`;
-    b.onclick = () => { state.bg[kind] = o.key; saveBg(kind, o.key); renderBgPicker(kind); updateLoopNote(); if (kind === 'results') queuePreview(); else updateTablePreview(); };
+    b.onclick = () => { state.bg[kind] = o.key; saveBg(kind, o.key); renderBgPicker(kind); if (kind === 'results') queuePreview(); else updateTablePreview(); };
     el.appendChild(b);
   });
 }
-function updateLoopNote() { $('loopNote').hidden = state.bg[state.mode] !== 'mid90s'; }
 async function loadBackgrounds() {
   try {
     const j = await readJson(await fetch('/api/backgrounds'), 'Backgrounds');
     state.bgOptions = j.backgrounds || [];
     const keys = new Set(state.bgOptions.map(o => o.key));
     ['results', 'table'].forEach(kind => { const s = savedBg(kind); state.bg[kind] = keys.has(s) ? s : j.defaults[kind]; renderBgPicker(kind); });
-    updateLoopNote(); queuePreview();
+    queuePreview();
   } catch (e) { $('resultsBgPicker').textContent = e.message; }
 }
 
@@ -474,7 +501,7 @@ function setMode(mode) {
   state.mode = mode;
   $('resultsArea').hidden = mode !== 'results'; $('tableArea').hidden = mode !== 'table';
   [['resultsTab', 'results'], ['tableTab', 'table']].forEach(([id, m]) => { $(id).classList.toggle('active', m === mode); $(id).setAttribute('aria-selected', m === mode); });
-  updatePreviewChrome(); updateLoopNote();
+  updatePreviewChrome();
   if (mode === 'results') { queuePreview(); } else { stopLiveTimer(); updateTablePreview(); }
   if (mode === 'results' && state.range.live && state.feedLoaded) loadFeed({ quiet: true });
 }
@@ -487,4 +514,5 @@ compEl(2).value = 'Championship';
 [1, 2].forEach(p => { for (let i = 0; i < 3; i++) addRow(p); });
 buildDateStrip(); syncPreviewLabels(); updateCounts(); setMode('results'); loadBackgrounds();
 chooseDay('live');
+loadDayCounts();
 if (document.fonts && document.fonts.load) document.fonts.load(`italic 700 ${RESULT_FONT_SIZE}px GrandscoresResult`).then(refreshAllWarnings).catch(() => { });
