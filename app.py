@@ -14,7 +14,9 @@ OUT.mkdir(exist_ok=True)
 W, H, FPS = 1080, 1920, 25
 FONT_PATH = ASSETS / 'Helvetica Condensed Bold Italic.ttf'
 BG_PATH = ASSETS / 'background.jpg'
-MID90S_BG_PATH = ASSETS / 'mid90s_loop_background.mp4'
+# A re-encode of the loop (1 reference frame, no B-frames) decodes in ~16 MB less
+# memory and looks the same; the original file is kept as a fallback.
+MID90S_BG_PATH = next((p for p in (ASSETS / 'mid90s_loop_background_lowmem.mp4', ASSETS / 'mid90s_loop_background.mp4') if p.exists()), ASSETS / 'mid90s_loop_background.mp4')
 PRINTER_SFX_PATH = ASSETS / 'printer_typing.wav'
 PRINTER_TITLE_FONT_PATH = ASSETS / 'Helvetica Neue Condensed Bold.ttf'
 BOX_PATH = ASSETS / 'result_box_row.png'
@@ -26,25 +28,24 @@ TABLE_DETAIL_PATH=ASSETS/'league_table_detail.png'
 TABLE_ROW_PATH=ASSETS/'league_row.png'
 TABLE_ORANGE_ROW_PATH=ASSETS/'league_orange_row.png'
 TABLE_WHITE_ROW_PATH=ASSETS/'league_white_row.png'
-TABLE_BG=Image.open(TABLE_BG_PATH).convert('RGBA')
+# Memory: only the strips of the row artwork that are drawn are kept; the
+# full-screen source images are discarded straight after cropping.
 TABLE_DETAIL=Image.open(TABLE_DETAIL_PATH).convert('RGBA')
-TABLE_ROW=Image.open(TABLE_ROW_PATH).convert('RGBA')
-TABLE_ORANGE_ROW=Image.open(TABLE_ORANGE_ROW_PATH).convert('RGBA')
-TABLE_WHITE_ROW=Image.open(TABLE_WHITE_ROW_PATH).convert('RGBA')
-TABLE_ROW_CROP=TABLE_ROW.crop((65,541,1035,649))
-TABLE_ORANGE_CROP=TABLE_ORANGE_ROW.crop((65,611,1035,719))
-TABLE_WHITE_CROP=TABLE_WHITE_ROW.crop((65,611,1035,719))
+TABLE_ROW_CROP=Image.open(TABLE_ROW_PATH).convert('RGBA').crop((65,541,1035,649))
+TABLE_ORANGE_CROP=Image.open(TABLE_ORANGE_ROW_PATH).convert('RGBA').crop((65,611,1035,719))
+TABLE_WHITE_CROP=Image.open(TABLE_WHITE_ROW_PATH).convert('RGBA').crop((65,611,1035,719))
 TABLE_LOGO_CROP=TABLE_DETAIL.crop((500,1200,1030,1380))
 TABLE_DETAIL_NO_LOGO=TABLE_DETAIL.copy()
 _alpha=TABLE_DETAIL_NO_LOGO.getchannel('A')
 for _y in range(1200,1380):
     for _x in range(500,1030): _alpha.putpixel((_x,_y),0)
 TABLE_DETAIL_NO_LOGO.putalpha(_alpha)
+del _alpha
 
 FONT_CACHE = {}
 RESULT_FONT_SIZE = 42
 MAX_TEAM_CHARS = 20
-APP_VERSION = '5.48'
+APP_VERSION = '5.50'
 PREVIEW_MAX_AGE = 300
 
 def font(size):
@@ -52,11 +53,25 @@ def font(size):
         FONT_CACHE[size] = ImageFont.truetype(str(FONT_PATH), size)
     return FONT_CACHE[size]
 
-BG = Image.open(BG_PATH).convert('RGBA')
 BOX = Image.open(BOX_PATH).convert('RGBA')
-IDENT = Image.open(IDENT_PATH).convert('RGBA')
-HEADER = Image.open(HEADER_PATH).convert('RGBA')
-IDENT_CROP = IDENT.crop((555,1222,986,1307))
+
+def _sprite(path):
+    """Load a full-screen overlay but keep only its visible part and position,
+    instead of holding a mostly transparent 1080x1920 canvas (8 MB) in memory."""
+    full=Image.open(path).convert('RGBA'); box=full.getbbox() or (0,0,1,1)
+    return full.crop(box), box
+
+IDENT, IDENT_BOX = _sprite(IDENT_PATH)      # IDENT_BOX = (left, top, right, bottom) on the 1080x1920 canvas
+HEADER, HEADER_BOX = _sprite(HEADER_PATH)
+IDENT_CROP = IDENT.crop((555-IDENT_BOX[0],1222-IDENT_BOX[1],986-IDENT_BOX[0],1307-IDENT_BOX[1]))
+
+def paste_sprite(base, sprite, box, shift_y=0):
+    """Composite a sprite where it sat on its original full-screen canvas,
+    moved down by shift_y, clipping anything that falls off the frame."""
+    x,y=box[0],box[1]+int(shift_y)
+    sx=max(0,-x); sy=max(0,-y); x=max(0,x); y=max(0,y)
+    w=min(sprite.width-sx,base.width-x); h=min(sprite.height-sy,base.height-y)
+    if w>0 and h>0: base.alpha_composite(sprite,(x,y),(sx,sy,sx+w,sy+h))
 
 JOBS = {}
 LOCK = threading.Lock()
@@ -77,13 +92,8 @@ SAMPLE = {
     ]
 }
 
-# Pre-compose only the artwork that never changes. Result boxes are added
-# per actual result so there are never blank result rows in the finished video.
-STATIC = BG.copy()
-STATIC_RGB = STATIC.convert('RGB')
-STATIC_WITH_IDENTITY = STATIC.copy()
-STATIC_WITH_IDENTITY.alpha_composite(IDENT, (0, 0))
-STATIC_WITH_IDENTITY_RGB = STATIC_WITH_IDENTITY.convert('RGB')
+# Still backgrounds are loaded on first use by still_background() (see the
+# background picker), rather than all being held in memory from start-up.
 
 app = Flask(__name__, template_folder=str(ROOT/'templates'), static_folder=str(ROOT/'static'))
 
@@ -189,8 +199,22 @@ def normalise_background(data, kind):
     data['mid90sLoopBackground'] = choice == 'mid90s'
     return choice
 
+def _loop_still():
+    """One full-size frame of the Mid-90s loop, so previews show the background
+    the rendered video will actually have."""
+    if 'mid90s' not in _BG_CACHE:
+        try:
+            raw = subprocess.run(['ffmpeg', '-loglevel', 'error', '-threads', '1', '-ss', '2', '-i', str(MID90S_BG_PATH), '-frames:v', '1',
+                                  '-f', 'image2pipe', '-vcodec', 'png', '-'], capture_output=True, check=True).stdout
+            from io import BytesIO
+            _BG_CACHE['mid90s'] = _fit_cover(Image.open(BytesIO(raw)))
+        except Exception:
+            return None
+    return _BG_CACHE['mid90s']
+
 def still_background(key):
-    """RGBA still for a background key (the Mid-90s loop has none, so use the default)."""
+    """RGBA still for a background key. For the Mid-90s loop this is a frame of the loop."""
+    if key == 'mid90s': return _loop_still()
     if key not in _BG_CACHE:
         opt = next((o for o in background_options() if o['key'] == key and o['path']), None)
         if not opt: return None
@@ -203,7 +227,7 @@ def use_background(key):
 
 def current_still(kind):
     key = getattr(_render_ctx, 'background', None)
-    im = still_background(key) if key and key != 'mid90s' else None
+    im = still_background(key) if key else None
     return (im or still_background(DEFAULT_BACKGROUND[kind])).copy()
 
 def animated_background_enabled(data):
@@ -215,11 +239,11 @@ def make_frame(data, reveal_index=None, progress=1.0, transparent=False):
     sections=data.get('sections') or [{'competition':data['competition'],'results':results}]
     combined=bool(data.get('sections'))
     if not combined:
-        if data['competition'].strip().lower()=='premier league': base.alpha_composite(HEADER,(0,0))
+        if data['competition'].strip().lower()=='premier league': paste_sprite(base,HEADER,HEADER_BOX)
         else:
             d=ImageDraw.Draw(base); title=data['competition'].strip() or 'Competition'; tf=font(64); tb=tf.getbbox(title); tx=84-tb[0]; ty=427-tb[1]
             d.text((tx+2,ty+2),title,font=tf,fill=(42,52,76,220)); d.text((tx,ty),title,font=tf,fill=(246,244,104,255))
-        identity_shift_y=70*(len(results)-9); base.alpha_composite(IDENT,(0,identity_shift_y))
+        identity_shift_y=70*(len(results)-9); paste_sprite(base,IDENT,IDENT_BOX,identity_shift_y)
         for i,r in enumerate(results): base.alpha_composite(BOX,(0,541+i*70))
         for i,r in enumerate(results):
             y=541+i*70; rev=1.0 if reveal_index is None else (1.0 if i<reveal_index else (0.0 if i>reveal_index else max(0,min(1,progress))))
@@ -258,8 +282,8 @@ def make_frame(data, reveal_index=None, progress=1.0, transparent=False):
             flat.append((row_index,r,y)); row_index+=1; y+=70
     final_row_bottom = flat[-1][2] + 109 if flat else 541
     identity_top = final_row_bottom + 12
-    identity_shift_y = identity_top - IDENT.getbbox()[1]
-    base.alpha_composite(IDENT,(0,identity_shift_y))
+    identity_shift_y = identity_top - IDENT_BOX[1]
+    paste_sprite(base,IDENT,IDENT_BOX,identity_shift_y)
     for idx,r,y in flat: base.alpha_composite(BOX,(0,y))
     f=font(RESULT_FONT_SIZE)
     for idx,r,y in flat:
@@ -401,7 +425,21 @@ def elevenlabs_tts(text,path,max_retries=6):
                 time.sleep(wait); delay=min(delay*2,12.0); continue
             raise RuntimeError(f'Could not connect to ElevenLabs: {e.reason}') from e
 
-def run_ffmpeg(cmd): return subprocess.run(cmd,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True)
+try:
+    import ctypes; _LIBC=ctypes.CDLL('libc.so.6')
+except Exception: _LIBC=None
+
+def release_memory():
+    """Hand memory freed by Python (frames already written) back to the system
+    so it is available to FFmpeg, rather than staying reserved by this process."""
+    import gc; gc.collect()
+    if _LIBC is not None:
+        try: _LIBC.malloc_trim(0)
+        except Exception: pass
+
+def run_ffmpeg(cmd):
+    release_memory()
+    return subprocess.run(cmd,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True)
 
 def audio_duration(path):
     return float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(path)],stderr=subprocess.DEVNULL).decode().strip())
@@ -468,7 +506,7 @@ def _encode_animated_foreground(frame_dir, out_path, total_frames):
          # 433 MB with 16 threads versus 160 MB with one.
          '-thread_queue_size','4','-stream_loop','-1','-threads','1','-i',str(MID90S_BG_PATH),
          '-thread_queue_size','4','-threads','1','-framerate',str(FPS),'-i',str(frame_dir/'%06d.png'),
-         '-filter_complex','[0:v][1:v]overlay=0:0:format=auto[v]',
+         '-filter_complex','[1:v]format=yuva420p[fg];[0:v][fg]overlay=0:0:format=yuv420[v]',
          '-map','[v]','-frames:v',str(total_frames),
          '-c:v','libx264','-preset','ultrafast','-threads','1','-crf','23',
          '-pix_fmt','yuv420p','-movflags','+faststart',str(out_path)]
@@ -1445,6 +1483,8 @@ def _mock_live_fixtures(start=None,end=None):
     ]
     out=[]; d=start; n=0
     while d<=end:
+        if d!=today and d.weekday() in (0,3):
+            d+=timedelta(days=1); n+=1; continue
         rot=n%len(base)
         for i,(lg,h,a,hs,as_,sc) in enumerate(base[rot:]+base[:rot]):
             kind='finished'; state='Finished'; t='15:00'; mins=None
@@ -1500,6 +1540,43 @@ def _range_label(start,end,today):
     if start==end==today: return 'Today'
     if start==end: return start.strftime('%A %-d %B')
     return f"{start.strftime('%-d %b')} – {end.strftime('%-d %b %Y')}"
+
+ENGLISH_LEAGUES={'premier league','championship','league one','league two','football league championship','football league one','football league two'}
+_DAYS_CACHE={}
+
+def _day_counts(fixtures):
+    """{date: {'all': n, 'english': n}} counting finished and in-play matches."""
+    days={}
+    for f in fixtures:
+        if f.get('kind') not in ('finished','live') or not f.get('date'): continue
+        d=days.setdefault(f['date'],{'all':0,'english':0}); d['all']+=1
+        if str(f.get('league') or '').strip().lower() in ENGLISH_LEAGUES: d['english']+=1
+    return days
+
+@app.get('/api/fixture-days')
+def api_fixture_days():
+    """Which recent days have results, for the dots on the date buttons. Uses a
+    light Sportmonks request (no goal events) and caches it for five minutes."""
+    try: start,end,today=_requested_range()
+    except ValueError as e: return jsonify(error=str(e)),400
+    if request.args.get('mode')=='test':
+        return jsonify(days=_day_counts(_mock_live_fixtures(start,end)))
+    token=os.getenv('SPORTMONKS_API_TOKEN')
+    if not token: return jsonify(error='SPORTMONKS_API_TOKEN is not set.'),500
+    key=(start,end); hit=_DAYS_CACHE.get(key)
+    if hit and time.time()-hit[0]<300: return jsonify(days=hit[1])
+    try:
+        url=f'https://api.sportmonks.com/v3/football/fixtures/between/{start.isoformat()}/{end.isoformat()}?include=league;state&per_page=50&order=asc'
+        raw=_sportmonks_get_all(url,token,max_pages=40)
+        fixtures=[]
+        for f in raw:
+            state=f.get('state') or {}
+            state_name=state.get('name') or state.get('developer_name') or f.get('state_name') or ''  # same as the main feed
+            fixtures.append({'kind':_fixture_kind(state_name),'date':_format_fixture_date(f.get('starting_at')),'league':(f.get('league') or {}).get('name')})
+        days=_day_counts(fixtures); _DAYS_CACHE[key]=(time.time(),days)
+        return jsonify(days=days)
+    except Exception as e:
+        return jsonify(error=f'Could not check which days have results: {e}'),502
 
 @app.get('/api/live-scores')
 @app.get('/api/fixtures')
@@ -1768,19 +1845,9 @@ def api_backgrounds():
 
 @app.get('/background-thumb/<key>')
 def background_thumb(key):
-    if key == 'mid90s':
-        if 'mid90s-thumb' not in _BG_CACHE:
-            try:
-                raw = subprocess.run(['ffmpeg', '-loglevel', 'error', '-ss', '2', '-i', str(MID90S_BG_PATH), '-frames:v', '1',
-                                      '-vf', 'scale=135:240', '-f', 'image2pipe', '-vcodec', 'png', '-'], capture_output=True, check=True).stdout
-                from io import BytesIO
-                _BG_CACHE['mid90s-thumb'] = Image.open(BytesIO(raw)).convert('RGB')
-            except Exception: abort(404)
-        im = _BG_CACHE['mid90s-thumb']
-    else:
-        im = still_background(key)
-        if im is None: abort(404)
-        im = im.convert('RGB').resize((135, 240))
+    im = still_background(key)
+    if im is None: abort(404)
+    im = im.convert('RGB').resize((135, 240))
     from io import BytesIO
     b = BytesIO(); im.save(b, 'JPEG', quality=80); b.seek(0)
     return send_file(b, mimetype='image/jpeg', max_age=3600)

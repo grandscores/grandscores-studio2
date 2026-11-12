@@ -72,6 +72,20 @@ assets/              Fonts, artwork, audio and the Mid-90s loop video
 
 ## Changelog
 
+### v5.50
+- Page 2 is switched off by default. It switches itself on when a second competition is added from the feed.
+- Day buttons show a green dot when that day has results (finished or in play) for the current league filter. Checked with a light Sportmonks request (`/api/fixture-days`), cached for five minutes and refreshed every ten.
+- Previews with the Mid-90s loop show a still frame of the loop instead of the default background, so the note under the preview has gone.
+- Test data has no matches on Mondays and Thursdays (except today), so the dots can be tested.
+
+### v5.49
+- Lower memory use for Mid-90s loop renders, which were still being killed (SIGKILL) on Railway. Measured on a 9-result render: app 164 MB → 71 MB, FFmpeg 184 MB → 134 MB at their peaks.
+  - Full-screen images no longer held from start-up: unused copies removed, still backgrounds load when first used, the logo and Premier League header keep only their visible area, and table row artwork keeps only the strips that are drawn.
+  - Memory freed by Python is returned to the system before each FFmpeg run.
+  - New `assets/mid90s_loop_background_lowmem.mp4`: the loop re-encoded to decode with less memory (visually identical). The original file is kept and used if the new one is missing.
+  - Foreground frames are converted once to the video's pixel format before overlaying.
+- All graphics checked pixel-for-pixel against v5.48.
+
 ### v5.48
 - Voiceover: a subtle 0.1-second pause is back between the away team and its score, without the comma that made the score sound stressed. Adjustable with the optional Railway variable `VO_AWAY_SCORE_PAUSE` (0 to 0.5 seconds).
 
